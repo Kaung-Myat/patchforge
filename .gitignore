@@ -1,0 +1,16 @@
+# Rust
+target/
+
+# Flutter
+.dart_tool/
+build/
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
