@@ -8,7 +8,22 @@ const demoLabel = String.fromEnvironment(
 
 const patchForgeAppId = String.fromEnvironment(
   'PATCHFORGE_APP_ID',
-  defaultValue: '03442aa7-7bec-4ca9-9f13-a095b49b7af4',
+  defaultValue: '419c2112-44ce-4158-812a-e9485b556d56',
+);
+
+const patchForgeServer = String.fromEnvironment(
+  'PATCHFORGE_URL',
+  defaultValue: 'https://104-207-92-53.sslip.io',
+);
+
+const patchForgeSigningKeyId = String.fromEnvironment(
+  'PATCHFORGE_KEY_ID',
+  defaultValue: 'main-20261012',
+);
+
+const patchForgeSigningPublicKey = String.fromEnvironment(
+  'PATCHFORGE_PUBLIC_KEY',
+  defaultValue: 'x5oNKvEXjPVgC4SF5KhsLUKFZ0gQAPw9xxCvLqvdbWk=',
 );
 
 void main() {
@@ -44,23 +59,15 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
 
-    const patchForgeServer = String.fromEnvironment(
-      'PATCHFORGE_URL',
-      defaultValue: 'http://192.168.99.109:8080',
-    );
-
     patchForge = PatchForge(
       config: const PatchForgeConfig(
         baseUrl: patchForgeServer,
 
         appId: patchForgeAppId,
 
-        trustedPublicKeys: {
-          'main-2026': '6Xmg6UoF8mi5K8KeHPliblzkrG3jsRPI+siCE8HcJPw=',
-          'rotation-2026': 'ye/2ZzoUh3L6YHtXJACNJKQCwCl3ltaCF+qHtPBZt/U=',
-        },
+        trustedPublicKeys: {patchForgeSigningKeyId: patchForgeSigningPublicKey},
 
-        revokedKeyIds: {'main-2026'},
+        revokedKeyIds: {},
 
         bootStabilizationDelay: Duration(seconds: 5),
       ),
