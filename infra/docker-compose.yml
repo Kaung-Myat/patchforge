@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:16
+
+    environment:
+      POSTGRES_USER: patchforge
+      POSTGRES_PASSWORD: patchforge_password
+      POSTGRES_DB: patchforge
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U patchforge -d patchforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+
+    env_file:
+      - ../server/.env
+
+    # The runtime UID/GID must own the 0600 host signing-key file. Keeping this
+    # configurable avoids making the private key readable by other users.
+    user: "${PATCHFORGE_RUNTIME_UID:-1000}:${PATCHFORGE_RUNTIME_GID:-1000}"
+
+    environment:
+      DATABASE_URL: postgres://patchforge:patchforge_password@postgres:5432/patchforge
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      PATCHFORGE_PRIVATE_KEY_FILE: /run/secrets/patchforge_private_key
+      PATCHFORGE_PRIVATE_KEY: ""
+      PATCHFORGE_TRUST_PROXY: "true"
+      PATCHFORGE_HTTPS_ENABLED: "true"
+
+    secrets:
+      - patchforge_private_key
+
+    expose:
+      - "8080"
+
+    volumes:
+      - ../storage:/app/storage:ro
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+
+    environment:
+      PATCHFORGE_DOMAIN: ${PATCHFORGE_DOMAIN:-localhost}
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+    depends_on:
+      - server
+
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+secrets:
+  patchforge_private_key:
+    file: ${PATCHFORGE_PRIVATE_KEY_FILE:-/home/kmt/.config/patchforge/rotation-2026.key}

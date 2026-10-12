@@ -1,0 +1,6 @@
+ALTER TABLE patches
+ADD COLUMN patch_format VARCHAR(50),
+ADD COLUMN architecture VARCHAR(50),
+ADD COLUMN base_sha256 VARCHAR(64),
+ADD COLUMN target_sha256 VARCHAR(64),
+ADD COLUMN target_file_size BIGINT;

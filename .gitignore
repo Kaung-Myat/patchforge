@@ -1,16 +1,87 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+key.properties
+
 # Rust
 target/
+**/*.rs.bk
 
-# Flutter
+# Dart and Flutter
 .dart_tool/
+.packages
+.pub-cache/
+.flutter-plugins
+.flutter-plugins-dependencies
 build/
+coverage/
+doc/api/
+*.iml
 
-# Environment
-.env
+# Android generated files
+.gradle/
+local.properties
+captures/
 
-# IDE
+# Apple generated files
+Pods/
+.symlinks/
+DerivedData/
+Flutter/ephemeral/
+Flutter/Generated.xcconfig
+Flutter/flutter_export_environment.sh
+**/GeneratedPluginRegistrant.*
+
+# Generated release and delta artifacts
+*.apk
+*.aab
+*.ipa
+*.app
+*.so
+*.dylib
+*.patch
+*.bin
+
+# Local experiments and runtime storage
+/experiments/
+/storage/*
+!/storage/.gitkeep
+/backups/
+*.sql.gz
+*.tar.gz
+
+# Docker runtime data
+/postgres-data/
+/caddy-data/
+/caddy-config/
+docker-compose.override.yml
+
+# Logs, temporary files, and coverage
+*.log
+*.tmp
+*.swp
+*.swo
+*.pid
+*.profraw
+*.profdata
+
+# IDE and editor settings
 .idea/
 .vscode/
+*.code-workspace
 
-# OS
+# OS metadata
 .DS_Store
+Thumbs.db
+
+# Local AI/tool state
+.codex/
+.agents/

@@ -1,0 +1,19 @@
+{$PATCHFORGE_DOMAIN:localhost} {
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	reverse_proxy server:8080
+}

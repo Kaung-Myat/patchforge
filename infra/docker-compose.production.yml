@@ -1,0 +1,20 @@
+services:
+  postgres:
+    # Docker-published ports bypass some host firewall configurations. Keep the
+    # database reachable only by services on the private Compose network.
+    ports: !reset []
+    environment:
+      POSTGRES_PASSWORD: ${PATCHFORGE_DB_PASSWORD:?Set PATCHFORGE_DB_PASSWORD}
+
+  server:
+    environment:
+      DATABASE_URL: postgres://patchforge:${PATCHFORGE_DB_PASSWORD:?Set PATCHFORGE_DB_PASSWORD}@postgres:5432/patchforge
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    security_opt:
+      - no-new-privileges:true
