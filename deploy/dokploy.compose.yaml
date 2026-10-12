@@ -33,6 +33,21 @@ services:
       - patchforge_private_key
     expose:
       - "8080"
+    networks:
+      - default
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.routers.patchforge-ota-http.rule=Host(`${PATCHFORGE_DOMAIN:?Domain is required}`)"
+      - "traefik.http.routers.patchforge-ota-http.entrypoints=web"
+      - "traefik.http.routers.patchforge-ota-http.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.patchforge-ota-https.rule=Host(`${PATCHFORGE_DOMAIN:?Domain is required}`)"
+      - "traefik.http.routers.patchforge-ota-https.entrypoints=websecure"
+      - "traefik.http.routers.patchforge-ota-https.tls=true"
+      - "traefik.http.routers.patchforge-ota-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.patchforge-ota-https.service=patchforge-ota"
+      - "traefik.http.services.patchforge-ota.loadbalancer.server.port=8080"
     volumes:
       - ${PATCHFORGE_STORAGE_DIR:-/opt/patchforge/storage}:/app/storage:ro
     depends_on:
@@ -53,3 +68,7 @@ volumes:
 secrets:
   patchforge_private_key:
     file: ${PATCHFORGE_PRIVATE_KEY_FILE:-/opt/patchforge/secrets/signing-private-key}
+
+networks:
+  dokploy-network:
+    external: true

@@ -76,28 +76,32 @@ In Dokploy:
 5. Set the Compose Path to `./deploy/dokploy.compose.yaml`.
 6. Open the Environment tab and paste the contents of
    `/opt/patchforge/dokploy.env`.
-7. Save, but do not deploy until the domain is configured.
+7. Save, but do not deploy until the environment is configured.
 
 Never commit `dokploy.env`, the publisher token, the database password, or the
 signing key to Git.
 
-## 5. Add the sslip.io domain
+## 5. Configure the sslip.io route
 
-In the Compose service's Domains tab, add:
+Do not create this hostname in Dokploy's Domains tab. Dokploy treats `sslip.io`
+entries created through that UI as HTTP-only testing domains. PatchForge needs
+HTTPS because publisher credentials and signed update traffic must never be
+sent over plaintext HTTP.
 
-| Field | Value |
-| --- | --- |
-| Service | `server` |
-| Host | `104-207-92-53.sslip.io` |
-| Path | `/` |
-| Container Port | `8080` |
-| HTTPS | Enabled |
-| Certificate | `letsencrypt` |
+The repository Compose file therefore contains explicit Traefik labels for the
+HTTP-to-HTTPS redirect, Let's Encrypt certificate, and `server:8080` route. It
+also connects only the API server to the external `dokploy-network`. Confirm
+that the Environment tab contains:
 
-Leave Internal Path empty and Strip Path disabled. Dokploy injects the Traefik
-labels and routing network when it deploys the Compose service.
+```text
+PATCHFORGE_DOMAIN=104-207-92-53.sslip.io
+```
 
-Deploy the service. Do not expose PostgreSQL or port 8080 through the host.
+Leave the Domains tab empty and deploy the service. Do not expose PostgreSQL or
+port 8080 through the host. If Let's Encrypt has temporarily rate-limited the
+shared `sslip.io` zone, the deployment will run but HTTPS certificate issuance
+will fail; keep the previous stack stopped and inspect the Traefik logs before
+retrying or rolling back.
 
 ## 6. Verify the cutover
 
