@@ -46,6 +46,14 @@ Server images are published to
 `v*` tag is pushed. Deployments use the `latest` tag by default; set
 `PATCHFORGE_SERVER_IMAGE` in `/opt/patchforge/config.env` to pin a release.
 
+### Manage PatchForge with Dokploy
+
+An existing standalone installation can be moved to Dokploy while preserving
+its PostgreSQL data, signing identity, publisher credential, and patch storage.
+Use the dedicated Compose file at `deploy/dokploy.compose.yaml` and follow the
+controlled migration in [docs/DOKPLOY.md](docs/DOKPLOY.md). Dokploy's Traefik
+proxy replaces Caddy; do not run both stacks at the same time.
+
 ## Publisher authentication
 
 All management endpoints for apps, releases, and patches require an HTTP

@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: patchforge
+      POSTGRES_PASSWORD: ${PATCHFORGE_DB_PASSWORD:?Database password is required}
+      POSTGRES_DB: patchforge
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U patchforge -d patchforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  server:
+    image: ${PATCHFORGE_SERVER_IMAGE:-ghcr.io/kaung-myat/patchforge-server:latest}
+    user: "65532:65532"
+    environment:
+      DATABASE_URL: postgres://patchforge:${PATCHFORGE_DB_PASSWORD}@postgres:5432/patchforge
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      PATCHFORGE_KEY_ID: ${PATCHFORGE_KEY_ID:?Signing key ID is required}
+      PATCHFORGE_PRIVATE_KEY_FILE: /run/secrets/patchforge_private_key
+      PATCHFORGE_PRIVATE_KEY: ""
+      PATCHFORGE_PUBLISH_TOKEN_HASHES: ${PATCHFORGE_PUBLISH_TOKEN_HASHES:?Publisher token hash is required}
+      PATCHFORGE_TRUST_PROXY: "true"
+      PATCHFORGE_HTTPS_ENABLED: "true"
+    secrets:
+      - patchforge_private_key
+    expose:
+      - "8080"
+    volumes:
+      - ${PATCHFORGE_STORAGE_DIR:-/opt/patchforge/storage}:/app/storage:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_data:
+    external: true
+    name: ${PATCHFORGE_POSTGRES_VOLUME:-patchforge_postgres_data}
+
+secrets:
+  patchforge_private_key:
+    file: ${PATCHFORGE_PRIVATE_KEY_FILE:-/opt/patchforge/secrets/signing-private-key}
