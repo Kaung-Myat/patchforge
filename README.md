@@ -20,7 +20,10 @@ The installer adds Docker Engine and Compose when needed, generates the
 database password, Ed25519 signing key, and publisher credential, downloads a
 standalone production Compose bundle, starts the services, and verifies the
 public HTTPS health endpoint. Existing secrets are preserved when the installer
-is run again.
+is run again. Patch storage is owned by the administrator who invoked `sudo`,
+so that administrator can publish artifacts over SSH without granting access to
+the signing key or database credentials. Override the account with
+`PATCHFORGE_PUBLISH_USER` when a dedicated publisher account is preferred.
 
 Manage an installed server with:
 

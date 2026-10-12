@@ -52,7 +52,16 @@ EOF
 install_docker
 apt-get install -y curl openssl jq
 
-mkdir -p "$INSTALL_DIR/secrets" "$INSTALL_DIR/storage/patches" "$INSTALL_DIR/backups"
+PUBLISH_USER="${PATCHFORGE_PUBLISH_USER:-${SUDO_USER:-root}}"
+if ! id "$PUBLISH_USER" >/dev/null 2>&1; then
+  echo "Patch publisher user does not exist: $PUBLISH_USER" >&2
+  exit 1
+fi
+PUBLISH_GROUP="$(id -gn "$PUBLISH_USER")"
+
+mkdir -p "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
+install -d -m 0755 -o "$PUBLISH_USER" -g "$PUBLISH_GROUP" \
+  "$INSTALL_DIR/storage" "$INSTALL_DIR/storage/patches"
 chmod 700 "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
 
 CONFIG_FILE="$INSTALL_DIR/config.env"
@@ -84,12 +93,17 @@ else
   chmod 400 "$INSTALL_DIR/secrets/signing-private-key"
   chmod 600 "$INSTALL_DIR/secrets/publisher-token"
 
+  SERVER_IMAGE_TAG="latest"
+  if [[ "$INSTALL_VERSION" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    SERVER_IMAGE_TAG="${BASH_REMATCH[1]}"
+  fi
+
   cat >"$CONFIG_FILE" <<EOF
 PATCHFORGE_DOMAIN=$DOMAIN
 PATCHFORGE_DB_PASSWORD=$DB_PASSWORD
 PATCHFORGE_KEY_ID=$KEY_ID
 PATCHFORGE_PUBLISH_TOKEN_HASHES=$PUBLISH_HASH
-PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:latest
+PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:$SERVER_IMAGE_TAG
 EOF
   chmod 600 "$CONFIG_FILE"
   unset DB_PASSWORD PUBLISH_TOKEN PUBLISH_HASH
