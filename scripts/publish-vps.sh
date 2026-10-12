@@ -22,7 +22,7 @@ if [[ "$TOKEN_MODE" != "600" ]]; then
   exit 1
 fi
 
-IFS= read -r PATCHFORGE_TOKEN < "$PATCHFORGE_TOKEN_FILE"
+PATCHFORGE_TOKEN="$(<"$PATCHFORGE_TOKEN_FILE")"
 if [[ -z "$PATCHFORGE_TOKEN" ]]; then
   echo "Publisher token file is empty" >&2
   exit 1
