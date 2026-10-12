@@ -4,6 +4,45 @@ PatchForge is a self-hosted Flutter OTA proof of concept. It generates signed
 `bsdiff` deltas for Android `libapp.so`, verifies reconstructed artifacts, and
 serves update manifests to the Flutter SDK.
 
+## Install on a dedicated VPS
+
+The packaged installer currently supports Ubuntu 22.04/24.04 on amd64 with a
+domain pointing to the VPS and inbound ports 80/443 open. Download and inspect
+the installer, then run it as root:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Kaung-Myat/patchforge/main/scripts/install.sh
+less install.sh
+sudo bash install.sh
+```
+
+The installer adds Docker Engine and Compose when needed, generates the
+database password, Ed25519 signing key, and publisher credential, downloads a
+standalone production Compose bundle, starts the services, and verifies the
+public HTTPS health endpoint. Existing secrets are preserved when the installer
+is run again.
+
+Manage an installed server with:
+
+```bash
+sudo patchforge status
+sudo patchforge doctor
+sudo patchforge logs server
+sudo patchforge backup
+sudo patchforge update
+```
+
+Runtime files live under `/opt/patchforge`. The raw publisher credential is
+stored with mode `0600` at
+`/opt/patchforge/secrets/publisher-token`; the API container receives only its
+SHA-256 hash. Copy that token once to the secured publisher workstation. The
+private signing key is mounted only into the API container as a Compose secret.
+
+Server images are published to
+`ghcr.io/kaung-myat/patchforge-server` by the GitHub Actions workflow whenever a
+`v*` tag is pushed. Deployments use the `latest` tag by default; set
+`PATCHFORGE_SERVER_IMAGE` in `/opt/patchforge/config.env` to pin a release.
+
 ## Publisher authentication
 
 All management endpoints for apps, releases, and patches require an HTTP
