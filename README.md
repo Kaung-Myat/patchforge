@@ -48,11 +48,33 @@ Server images are published to
 
 ### Manage PatchForge with Dokploy
 
-An existing standalone installation can be moved to Dokploy while preserving
-its PostgreSQL data, signing identity, publisher credential, and patch storage.
-Use the dedicated Compose file at `deploy/dokploy.compose.yaml` and follow the
-controlled migration in [docs/DOKPLOY.md](docs/DOKPLOY.md). Dokploy's Traefik
-proxy replaces Caddy; do not run both stacks at the same time.
+For a new Dokploy installation, one preparation command generates the database
+password, Ed25519 signing key, publisher credential, storage directories, and
+external PostgreSQL volume:
+
+```bash
+sudo env \
+  PATCHFORGE_DOMAIN=updates.example.com \
+  PATCHFORGE_PUBLISH_USER="$USER" \
+  bash scripts/prepare-dokploy-install.sh
+```
+
+Create a Dokploy Compose service from this repository, select
+`deploy/dokploy.compose.yaml`, paste `/opt/patchforge/dokploy.env` into its
+Environment tab, and deploy. Verify the installation with:
+
+```bash
+sudo patchforge-dokploy doctor
+```
+
+An existing standalone installation can also be moved to Dokploy while
+preserving its PostgreSQL data, signing identity, publisher credential, and
+patch storage. Follow both workflows in [docs/DOKPLOY.md](docs/DOKPLOY.md).
+Dokploy's Traefik proxy replaces Caddy; do not run both stacks at the same time.
+
+For production, select a release tag in Dokploy and pin
+`PATCHFORGE_SERVER_IMAGE` to the matching image version instead of `latest`.
+See [docs/RELEASE.md](docs/RELEASE.md) for the release checklist.
 
 ## Publisher authentication
 

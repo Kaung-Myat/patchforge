@@ -15,6 +15,7 @@ if [[ ! -r /etc/os-release ]]; then
   echo "This installer supports Ubuntu 22.04 and 24.04." >&2
   exit 1
 fi
+# shellcheck disable=SC1091
 . /etc/os-release
 if [[ "${ID:-}" != "ubuntu" || ! "${VERSION_ID:-}" =~ ^(22\.04|24\.04)$ ]]; then
   echo "Unsupported operating system: ${PRETTY_NAME:-unknown}" >&2
@@ -122,7 +123,7 @@ docker compose --env-file config.env -f compose.yaml pull
 docker compose --env-file config.env -f compose.yaml up -d
 
 set -a
-# shellcheck disable=SC1091
+# shellcheck disable=SC1090
 source "$CONFIG_FILE"
 set +a
 

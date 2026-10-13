@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        crate:
+          - server
+          - cli
+    defaults:
+      run:
+        working-directory: ${{ matrix.crate }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked
+
+  flutter-sdk:
+    name: Flutter SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/flutter/patchforge_sdk
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test
+
+  deployment:
+    name: Deployment files
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate shell scripts
+        run: shellcheck scripts/*.sh
+
+      - name: Validate Dokploy Compose
+        env:
+          PATCHFORGE_DOMAIN: updates.example.com
+          PATCHFORGE_DB_PASSWORD: test-password
+          PATCHFORGE_KEY_ID: test-key
+          PATCHFORGE_PUBLISH_TOKEN_HASHES: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          PATCHFORGE_PRIVATE_KEY_FILE: /tmp/patchforge-test-key
+          PATCHFORGE_STORAGE_DIR: /tmp/patchforge-test-storage
+        run: |
+          touch "$PATCHFORGE_PRIVATE_KEY_FILE"
+          mkdir -p "$PATCHFORGE_STORAGE_DIR"
+          docker compose -f deploy/dokploy.compose.yaml config --quiet

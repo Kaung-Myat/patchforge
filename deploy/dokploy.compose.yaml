@@ -15,6 +15,9 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    labels:
+      - "dev.patchforge.stack=ota"
+      - "dev.patchforge.role=postgres"
 
   server:
     image: ${PATCHFORGE_SERVER_IMAGE:-ghcr.io/kaung-myat/patchforge-server:latest}
@@ -37,6 +40,8 @@ services:
       - default
       - dokploy-network
     labels:
+      - "dev.patchforge.stack=ota"
+      - "dev.patchforge.role=server"
       - "traefik.enable=true"
       - "traefik.docker.network=dokploy-network"
       - "traefik.http.routers.patchforge-ota-http.rule=Host(`${PATCHFORGE_DOMAIN:?Domain is required}`)"

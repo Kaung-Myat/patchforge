@@ -21,6 +21,9 @@ struct Cli {
     command: Commands,
 }
 
+// Clap owns this enum only during command parsing, so the larger Publish
+// variant does not remain in long-lived application state.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
     /// Print the SHA-256 hash used in server token configuration.

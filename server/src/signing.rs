@@ -125,6 +125,9 @@ pub async fn sync_active_signing_key(pool: &PgPool) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+// The ordered arguments mirror the immutable signed manifest fields. Keeping
+// them explicit makes accidental signature-format changes visible at callers.
+#[allow(clippy::too_many_arguments)]
 pub fn build_patch_payload(
     manifest_version: i32,
     key_id: &str,

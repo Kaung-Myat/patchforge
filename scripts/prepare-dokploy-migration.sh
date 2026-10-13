@@ -7,6 +7,7 @@ OUTPUT_FILE="$INSTALL_DIR/dokploy.env"
 POSTGRES_VOLUME="${PATCHFORGE_POSTGRES_VOLUME:-patchforge_postgres_data}"
 PRIVATE_KEY_FILE="$INSTALL_DIR/secrets/signing-private-key"
 STORAGE_DIR="$INSTALL_DIR/storage"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run with sudo: sudo bash scripts/prepare-dokploy-migration.sh" >&2
@@ -79,6 +80,10 @@ PATCHFORGE_STORAGE_DIR=$STORAGE_DIR
 EOF
 chmod 600 "$OUTPUT_FILE"
 
+if [[ -f "$SCRIPT_DIR/patchforge-dokploy.sh" ]]; then
+  install -m 0755 "$SCRIPT_DIR/patchforge-dokploy.sh" /usr/local/bin/patchforge-dokploy
+fi
+
 DOMAIN="${PATCHFORGE_DOMAIN:-}"
 if [[ -n "$DOMAIN" ]] && ! getent ahostsv4 "$DOMAIN" | awk '{print $1}' | grep -Fxq "$(curl -4fsS https://api.ipify.org)"; then
   echo "Warning: $DOMAIN does not currently resolve to this VPS public IPv4 address." >&2
@@ -95,3 +100,6 @@ if [[ -n "$DOMAIN" ]]; then
 fi
 echo
 echo "No services were stopped. Follow docs/DOKPLOY.md for the controlled cutover."
+if command -v patchforge-dokploy >/dev/null 2>&1; then
+  echo "After deployment, verify it with: sudo patchforge-dokploy doctor"
+fi
