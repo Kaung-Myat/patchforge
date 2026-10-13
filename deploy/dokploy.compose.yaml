@@ -30,6 +30,8 @@ services:
       PATCHFORGE_PRIVATE_KEY_FILE: /run/secrets/patchforge_private_key
       PATCHFORGE_PRIVATE_KEY: ""
       PATCHFORGE_PUBLISH_TOKEN_HASHES: ${PATCHFORGE_PUBLISH_TOKEN_HASHES:?Publisher token hash is required}
+      PATCHFORGE_STORAGE_DIR: /app/storage
+      PATCHFORGE_MAX_ARTIFACT_SIZE_BYTES: ${PATCHFORGE_MAX_ARTIFACT_SIZE_BYTES:-104857600}
       PATCHFORGE_TRUST_PROXY: "true"
       PATCHFORGE_HTTPS_ENABLED: "true"
     secrets:
@@ -54,7 +56,7 @@ services:
       - "traefik.http.routers.patchforge-ota-https.service=patchforge-ota"
       - "traefik.http.services.patchforge-ota.loadbalancer.server.port=8080"
     volumes:
-      - ${PATCHFORGE_STORAGE_DIR:-/opt/patchforge/storage}:/app/storage:ro
+      - ${PATCHFORGE_STORAGE_DIR:-/opt/patchforge/storage}:/app/storage
     depends_on:
       postgres:
         condition: service_healthy

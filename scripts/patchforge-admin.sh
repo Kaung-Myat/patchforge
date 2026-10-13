@@ -55,6 +55,7 @@ case "$COMMAND" in
   doctor)
     compose config --quiet
     compose ps
+    compose exec -T server test -w /app/storage/patches
     curl -fsS "https://$PATCHFORGE_DOMAIN/health" >/dev/null
     UNAUTH_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' "https://$PATCHFORGE_DOMAIN/api/v1/apps")"
     if [[ "$UNAUTH_STATUS" != "401" ]]; then

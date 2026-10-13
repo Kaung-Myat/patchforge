@@ -1,4 +1,5 @@
 pub mod apps;
+pub mod artifacts;
 pub mod audit_events;
 pub mod health;
 pub mod patches;

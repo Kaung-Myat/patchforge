@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
 };
 
@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     models::patch::{CreatePatchRequest, Patch},
+    routes::artifacts::ArtifactStorage,
     signing::{ConfiguredSigningKey, build_patch_payload, sign_payload},
 };
 
@@ -31,6 +32,7 @@ fn is_supported_architecture(value: &str) -> bool {
 pub async fn create_patch(
     Path(release_id): Path<Uuid>,
     State(pool): State<PgPool>,
+    Extension(storage): Extension<ArtifactStorage>,
     Json(payload): Json<CreatePatchRequest>,
 ) -> Result<(StatusCode, Json<Patch>), (StatusCode, String)> {
     // 1. Find release
@@ -150,6 +152,29 @@ pub async fn create_patch(
                 "Base SHA-256 mismatch for {} patch {}: expected {}, received {}",
                 architecture, base_patch_number, expected_base_sha256, base_sha256
             ),
+        ));
+    }
+
+    let artifact_size = u64::try_from(payload.file_size).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Artifact file size is invalid".to_string(),
+        )
+    })?;
+    let artifact_verified = storage
+        .verifies(&payload.file_path, &payload.sha256, artifact_size)
+        .await
+        .map_err(|error| {
+            eprintln!("Failed to verify patch artifact: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to verify patch artifact".to_string(),
+            )
+        })?;
+    if !artifact_verified {
+        return Err((
+            StatusCode::CONFLICT,
+            "Upload the verified patch artifact before creating its patch record".to_string(),
         ));
     }
 

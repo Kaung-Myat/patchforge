@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Add authenticated, streamed HTTPS patch uploads with server-side SHA-256 and
+  size verification, atomic publication, safe retry handling, and path checks.
+- Make HTTPS the default CLI publishing transport so publishers no longer need
+  VPS SSH accounts or direct artifact-storage access.
+
 ## 0.2.0
 
 - Add production-ready Dokploy deployment with Traefik HTTPS routing.

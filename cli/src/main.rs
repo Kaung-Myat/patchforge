@@ -88,10 +88,10 @@ enum Commands {
         new: PathBuf,
         #[arg(long, default_value = "arm64-v8a")]
         architecture: String,
-        /// Server-local artifact storage root served at /artifacts.
-        #[arg(long, default_value = "storage")]
-        storage_dir: PathBuf,
-        /// SSH destination used to upload artifacts to a remote server host.
+        /// Legacy server-local artifact storage root. Omit to upload over HTTPS.
+        #[arg(long, conflicts_with = "ssh_target")]
+        storage_dir: Option<PathBuf>,
+        /// Legacy SSH destination. Omit to upload over the authenticated HTTPS API.
         #[arg(long, requires = "remote_storage_dir")]
         ssh_target: Option<String>,
         /// SSH port used with --ssh-target.
@@ -160,6 +160,13 @@ struct CreateReleaseArtifactRequest<'a> {
 }
 
 #[derive(Debug, Deserialize)]
+struct UploadedArtifact {
+    artifact_path: String,
+    sha256: String,
+    file_size: u64,
+}
+
+#[derive(Debug, Deserialize)]
 struct UpdateResponse {
     update_available: bool,
     manifest: Option<PatchManifest>,
@@ -200,7 +207,7 @@ struct PublishOptions<'a> {
     old: &'a Path,
     new: &'a Path,
     architecture: &'a str,
-    storage_dir: &'a Path,
+    storage_dir: Option<&'a Path>,
     ssh_target: Option<&'a str>,
     ssh_port: u16,
     remote_storage_dir: Option<&'a Path>,
@@ -557,6 +564,42 @@ fn upload_remote_artifact(
     Ok(())
 }
 
+fn upload_api_artifact(
+    client: &Client,
+    server_url: &str,
+    token: &str,
+    source: &Path,
+    public_path: &str,
+    expected_sha256: &str,
+    expected_size: i64,
+) -> Result<()> {
+    let file = File::open(source)
+        .with_context(|| format!("Failed to read generated artifact {}", source.display()))?;
+    let size = u64::try_from(expected_size).context("Artifact size cannot be negative")?;
+    let upload_url = api_url(server_url, &format!("api/v1/artifacts/{public_path}"));
+    let uploaded: UploadedArtifact = checked_response(
+        client
+            .put(upload_url)
+            .bearer_auth(token)
+            .header("content-type", "application/octet-stream")
+            .header("x-patchforge-sha256", expected_sha256)
+            .header("x-patchforge-file-size", size)
+            .body(reqwest::blocking::Body::sized(file, size))
+            .send()?,
+        "Uploading patch artifact",
+    )?
+    .json()?;
+
+    if uploaded.artifact_path != public_path
+        || uploaded.sha256 != expected_sha256
+        || uploaded.file_size != size
+    {
+        bail!("Server upload response does not match the generated patch: {uploaded:#?}");
+    }
+    println!("Uploaded artifact over HTTPS: {public_path}");
+    Ok(())
+}
+
 fn publish(options: PublishOptions<'_>) -> Result<()> {
     if !is_supported_android_architecture(options.architecture) {
         bail!(
@@ -738,16 +781,29 @@ fn publish(options: PublishOptions<'_>) -> Result<()> {
         &patch_hash[..12]
     );
     let public_path = artifact_path(options.artifact_prefix, &filename);
-    match (options.ssh_target, options.remote_storage_dir) {
-        (Some(ssh_target), Some(remote_storage_dir)) => upload_remote_artifact(
+    match (
+        options.storage_dir,
+        options.ssh_target,
+        options.remote_storage_dir,
+    ) {
+        (None, None, None) => upload_api_artifact(
+            &client,
+            options.server_url,
+            options.token,
+            &patch_path,
+            &public_path,
+            &patch_hash,
+            patch_size,
+        )?,
+        (None, Some(ssh_target), Some(remote_storage_dir)) => upload_remote_artifact(
             &patch_path,
             ssh_target,
             options.ssh_port,
             remote_storage_dir,
             &filename,
         )?,
-        (None, None) => {
-            let patch_storage_dir = options.storage_dir.join("patches");
+        (Some(storage_dir), None, None) => {
+            let patch_storage_dir = storage_dir.join("patches");
             fs::create_dir_all(&patch_storage_dir).with_context(|| {
                 format!(
                     "Failed to create artifact directory {}",
@@ -758,7 +814,9 @@ fn publish(options: PublishOptions<'_>) -> Result<()> {
             copy_new(&patch_path, &stored_path)?;
             println!("Stored artifact: {}", stored_path.display());
         }
-        _ => bail!("--ssh-target and --remote-storage-dir must be used together"),
+        _ => bail!(
+            "Use the HTTPS upload default, --storage-dir, or both --ssh-target and --remote-storage-dir"
+        ),
     }
     println!("Public artifact path: {public_path}");
 
@@ -925,7 +983,7 @@ fn main() -> Result<()> {
             old: &old,
             new: &new,
             architecture: &architecture,
-            storage_dir: &storage_dir,
+            storage_dir: storage_dir.as_deref(),
             ssh_target: ssh_target.as_deref(),
             ssh_port,
             remote_storage_dir: remote_storage_dir.as_deref(),

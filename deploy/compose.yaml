@@ -27,6 +27,8 @@ services:
       PATCHFORGE_PRIVATE_KEY_FILE: /run/secrets/patchforge_private_key
       PATCHFORGE_PRIVATE_KEY: ""
       PATCHFORGE_PUBLISH_TOKEN_HASHES: ${PATCHFORGE_PUBLISH_TOKEN_HASHES:?Publisher token hash is required}
+      PATCHFORGE_STORAGE_DIR: /app/storage
+      PATCHFORGE_MAX_ARTIFACT_SIZE_BYTES: ${PATCHFORGE_MAX_ARTIFACT_SIZE_BYTES:-104857600}
       PATCHFORGE_TRUST_PROXY: "true"
       PATCHFORGE_HTTPS_ENABLED: "true"
     secrets:
@@ -34,7 +36,7 @@ services:
     expose:
       - "8080"
     volumes:
-      - ./storage:/app/storage:ro
+      - ./storage:/app/storage
     depends_on:
       postgres:
         condition: service_healthy

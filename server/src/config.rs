@@ -1,10 +1,12 @@
-use std::env;
+use std::{env, path::PathBuf};
 
 pub struct Config {
     pub database_url: String,
     pub server_host: String,
     pub server_port: String,
     pub publish_token_hashes: String,
+    pub storage_dir: PathBuf,
+    pub max_artifact_size_bytes: u64,
 }
 
 impl Config {
@@ -19,6 +21,19 @@ impl Config {
 
             publish_token_hashes: env::var("PATCHFORGE_PUBLISH_TOKEN_HASHES")
                 .expect("PATCHFORGE_PUBLISH_TOKEN_HASHES must be set"),
+
+            storage_dir: env::var("PATCHFORGE_STORAGE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("../storage")),
+
+            max_artifact_size_bytes: env::var("PATCHFORGE_MAX_ARTIFACT_SIZE_BYTES")
+                .ok()
+                .map(|value| {
+                    value
+                        .parse::<u64>()
+                        .expect("PATCHFORGE_MAX_ARTIFACT_SIZE_BYTES must be a positive integer")
+                })
+                .unwrap_or(100 * 1024 * 1024),
         }
     }
 }

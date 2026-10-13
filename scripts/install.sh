@@ -53,15 +53,8 @@ EOF
 install_docker
 apt-get install -y curl openssl jq
 
-PUBLISH_USER="${PATCHFORGE_PUBLISH_USER:-${SUDO_USER:-root}}"
-if ! id "$PUBLISH_USER" >/dev/null 2>&1; then
-  echo "Patch publisher user does not exist: $PUBLISH_USER" >&2
-  exit 1
-fi
-PUBLISH_GROUP="$(id -gn "$PUBLISH_USER")"
-
 mkdir -p "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
-install -d -m 0755 -o "$PUBLISH_USER" -g "$PUBLISH_GROUP" \
+install -d -m 0750 -o 65532 -g 65532 \
   "$INSTALL_DIR/storage" "$INSTALL_DIR/storage/patches"
 chmod 700 "$INSTALL_DIR/secrets" "$INSTALL_DIR/backups"
 

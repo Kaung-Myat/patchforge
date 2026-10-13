@@ -20,10 +20,9 @@ The installer adds Docker Engine and Compose when needed, generates the
 database password, Ed25519 signing key, and publisher credential, downloads a
 standalone production Compose bundle, starts the services, and verifies the
 public HTTPS health endpoint. Existing secrets are preserved when the installer
-is run again. Patch storage is owned by the administrator who invoked `sudo`,
-so that administrator can publish artifacts over SSH without granting access to
-the signing key or database credentials. Override the account with
-`PATCHFORGE_PUBLISH_USER` when a dedicated publisher account is preferred.
+is run again. Patch storage is writable only by the unprivileged API container;
+publishers upload verified artifacts through the authenticated HTTPS API and do
+not need a VPS account or direct filesystem access.
 
 Manage an installed server with:
 
@@ -55,7 +54,6 @@ external PostgreSQL volume:
 ```bash
 sudo env \
   PATCHFORGE_DOMAIN=updates.example.com \
-  PATCHFORGE_PUBLISH_USER="$USER" \
   bash scripts/prepare-dokploy-install.sh
 ```
 
@@ -128,12 +126,13 @@ The CLI `publish` command performs the full release pipeline:
 8. Fetches and validates the update manifest.
 9. Downloads the published artifact and verifies its SHA-256 and size.
 
-The publish command is intended to run on the self-hosted PatchForge server,
-where the CLI has local access to the artifact storage directory. This keeps
-artifact uploads off the unauthenticated public API.
+By default the CLI uploads the generated artifact through the authenticated
+HTTPS API. The server streams it to temporary storage, enforces its configured
+size limit, verifies its SHA-256 and byte length, and atomically publishes it
+only after validation. Publishers do not need SSH access to the VPS.
 
 Prerequisites: the PatchForge API and PostgreSQL must be running, and `bsdiff`
-and `bspatch` must be installed.
+and `bspatch` must be installed on the publisher workstation.
 
 Run from the repository root:
 
@@ -147,7 +146,6 @@ cargo run --manifest-path cli/Cargo.toml -- publish \
   --old path/to/base.apk \
   --new path/to/target.apk \
   --architecture arm64-v8a \
-  --storage-dir storage \
   --output path/to/retained-delta.patch
 ```
 
@@ -155,17 +153,16 @@ The command requires `PATCHFORGE_TOKEN` to be set. A missing or invalid token
 is rejected before the CLI reads release management data or creates a patch.
 
 `--patch-number` is optional. When omitted, the CLI uses the highest existing
-patch number plus one. `--output` is also optional; the server artifact is
-always retained under `<storage-dir>/patches`.
+patch number plus one. `--output` is also optional; the verified server
+artifact is retained by the configured storage provider.
 
 Use `cargo run --manifest-path cli/Cargo.toml -- publish --help` for every
 available option.
 
-### Publish directly to a remote VPS
+### Publish to a self-hosted server
 
-The CLI can upload the generated artifact over SSH before it creates the signed
-patch record. This keeps the artifact endpoint read-only while removing the
-manual `scp` step:
+The helper reads the publisher credential from a protected local file and uses
+the same authenticated HTTPS upload flow:
 
 ```bash
 scripts/publish-vps.sh \
@@ -182,13 +179,8 @@ scripts/publish-vps.sh \
 The helper reads the raw publisher token from
 `~/.config/patchforge/vps-publisher-token`, which must have mode `0600`. The
 token is never copied into the repository or VPS environment; the server keeps
-only its SHA-256 hash. Override `PATCHFORGE_SERVER_URL`, `PATCHFORGE_APP_ID`,
-`PATCHFORGE_SSH_TARGET`, `PATCHFORGE_SSH_PORT`, or
-`PATCHFORGE_REMOTE_STORAGE_DIR` when deploying another installation.
-
-The remote storage path must be absolute and cannot contain spaces or parent
-path components. SSH uses batch mode so publishing fails instead of prompting
-for a password in CI.
+only its SHA-256 hash. Override `PATCHFORGE_SERVER_URL`, `PATCHFORGE_APP_ID`, or
+`PATCHFORGE_TOKEN_FILE` when publishing to another installation.
 
 ## Architecture compatibility and patch chains
 
@@ -218,8 +210,7 @@ cargo run --manifest-path cli/Cargo.toml -- publish \
   --version 1.0.0 \
   --old path/to/base.apk \
   --new path/to/target.apk \
-  --architecture arm64-v8a \
-  --storage-dir storage
+  --architecture arm64-v8a
 ```
 
 The CLI automatically registers the first baseline, finds the correct parent
@@ -250,8 +241,7 @@ cargo run --manifest-path cli/Cargo.toml -- publish \
   --new path/to/target.apk \
   --channel beta \
   --rollout-percentage 25 \
-  --architecture arm64-v8a \
-  --storage-dir storage
+  --architecture arm64-v8a
 ```
 
 A 0% rollout is held back from every device; 100% reaches all devices. For an

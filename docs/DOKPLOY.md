@@ -9,8 +9,8 @@ container.
 ### 1. Prepare the persistent data and secrets
 
 Install Dokploy using its official instructions, clone PatchForge on the VPS,
-and run the preparation helper. Use an administrator account that can later
-upload patch artifacts over SSH:
+and run the preparation helper. Publishers upload artifacts over the protected
+HTTPS API and do not need a VPS account:
 
 ```bash
 sudo git clone https://github.com/Kaung-Myat/patchforge.git /srv/patchforge
@@ -19,8 +19,7 @@ cd /srv/patchforge
 
 sudo env \
   PATCHFORGE_DOMAIN=updates.example.com \
-  PATCHFORGE_PUBLISH_USER="$USER" \
-  PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.2.0 \
+  PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.3.0 \
   bash scripts/prepare-dokploy-install.sh
 ```
 
@@ -47,7 +46,7 @@ In Dokploy:
 1. Create a project named `PatchForge`.
 2. Create a `Compose` service and select `Docker Compose`.
 3. Use the Git repository `https://github.com/Kaung-Myat/patchforge`.
-4. Select the release tag matching the server image, for example `v0.2.0`.
+4. Select the release tag matching the server image, for example `v0.3.0`.
 5. Set Compose Path to `./deploy/dokploy.compose.yaml`.
 6. Paste the output of `sudo cat /opt/patchforge/dokploy.env` into the
    Environment tab and save it.
@@ -68,8 +67,33 @@ encrypted off-server storage. Copy the publisher token to the publisher
 workstation with mode `0600`, then configure the Flutter SDK with the server
 URL and public signing key.
 
+The server container owns `/opt/patchforge/storage` and verifies authenticated
+artifact uploads before publishing them atomically. Administrators should use
+`sudo` for backup or recovery access instead of granting publishers filesystem
+or SSH access.
+
 Use Dokploy for deployments, restarts, and image updates. Do not use the
 standalone `patchforge update` or `patchforge restart` commands.
+
+### Upgrade from 0.2.x to 0.3.0
+
+Version 0.3.0 moves publishing from SSH/SCP to the authenticated HTTPS API, so
+the unprivileged server container must own the storage directories. Run once
+on the VPS before deploying the 0.3.0 image:
+
+```bash
+sudo chown 65532:65532 \
+  /opt/patchforge/storage \
+  /opt/patchforge/storage/patches
+sudo chmod 0750 \
+  /opt/patchforge/storage \
+  /opt/patchforge/storage/patches
+```
+
+Set `PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.3.0` in
+Dokploy, save, deploy, reinstall the current `patchforge-dokploy` helper, and
+run `sudo patchforge-dokploy doctor`. The doctor now verifies that the API
+container can write to artifact storage.
 
 ### 4. Secure the Dokploy dashboard
 

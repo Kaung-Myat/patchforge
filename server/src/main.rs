@@ -8,7 +8,7 @@ mod signing;
 
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, Extension},
     middleware,
     routing::{get, post},
 };
@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 
 use routes::{
     apps::{create_app, list_apps},
+    artifacts::{ArtifactStorage, upload_artifact},
     audit_events::list_audit_events,
     health::health,
     patches::{create_patch, list_patches},
@@ -42,6 +43,10 @@ async fn main() {
         .expect("Invalid PATCHFORGE_PUBLISH_TOKEN_HASHES configuration")
         .with_audit_pool(db_pool.clone());
     let edge_security = EdgeSecurity::from_env().expect("Invalid edge security configuration");
+    let artifact_storage =
+        ArtifactStorage::new(config.storage_dir.clone(), config.max_artifact_size_bytes)
+            .await
+            .expect("Failed to initialize artifact storage");
 
     println!("Connected to PostgreSQL");
 
@@ -59,6 +64,10 @@ async fn main() {
             "/api/v1/releases/{release_id}/artifacts",
             post(create_release_artifact).get(list_release_artifacts),
         )
+        .route(
+            "/api/v1/artifacts/{*path}",
+            axum::routing::put(upload_artifact),
+        )
         .route("/api/v1/signing-keys", get(list_signing_keys))
         .route("/api/v1/audit-events", get(list_audit_events))
         .route(
@@ -69,13 +78,14 @@ async fn main() {
         .route_layer(middleware::from_fn_with_state(
             publish_auth,
             require_publisher,
-        ));
+        ))
+        .layer(Extension(artifact_storage));
 
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
         .route("/api/v1/apps/{app_id}/updates", get(check_update))
-        .nest_service("/artifacts", ServeDir::new("../storage"))
+        .nest_service("/artifacts", ServeDir::new(config.storage_dir))
         .merge(management_routes)
         .layer(middleware::from_fn_with_state(edge_security, protect))
         .with_state(db_pool);

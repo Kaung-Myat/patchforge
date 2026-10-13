@@ -112,8 +112,9 @@ case "$COMMAND" in
   doctor)
     PATCHFORGE_DOMAIN="$(resolve_domain)"
     show_status
-    container_for server >/dev/null
+    SERVER_CONTAINER="$(container_for server)"
     container_for postgres >/dev/null
+    docker exec "$SERVER_CONTAINER" test -w /app/storage/patches
     curl -fsS "https://$PATCHFORGE_DOMAIN/health" >/dev/null
     UNAUTH_STATUS="$(curl -sS -o /dev/null -w '%{http_code}' \
       "https://$PATCHFORGE_DOMAIN/api/v1/apps")"

@@ -1,3 +1,8 @@
+## 0.3.0
+
+- Align the SDK release with the authenticated HTTPS publishing protocol in
+  PatchForge Server and CLI 0.3.0. Client runtime APIs remain compatible.
+
 ## 0.2.0
 
 - Add stable persistent device identities for deterministic staged rollouts.
