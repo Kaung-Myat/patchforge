@@ -58,18 +58,51 @@ enum Commands {
     /// Create or select a server release for this project.
     Release {
         #[command(subcommand)]
-        command: ReleaseCommands,
+        command: Option<ReleaseCommands>,
+        /// Override the Flutter version detected from pubspec.yaml.
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        platform: Option<String>,
+        #[arg(long)]
+        channel: Option<String>,
+        #[arg(long, default_value = "patchforge.yaml")]
+        config: PathBuf,
+        #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
+        token: Option<String>,
     },
-    /// Create or publish OTA patches using the project configuration.
+    /// Publish the next OTA patch using the project configuration.
     Patch {
         #[command(subcommand)]
-        command: PatchCommands,
+        command: Option<PatchCommands>,
+        /// Base APK or libapp.so. With no subcommand, publishes the next patch.
+        #[arg(long)]
+        old: Option<PathBuf>,
+        /// Target APK or libapp.so. With no subcommand, publishes the next patch.
+        #[arg(long)]
+        new: Option<PathBuf>,
+        #[arg(long, default_value = "arm64-v8a")]
+        architecture: String,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(i32).range(0..=100))]
+        rollout_percentage: i32,
+        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(i32).range(1..=2))]
+        manifest_version: i32,
+        #[arg(long)]
+        patch_number: Option<i32>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long, default_value = "patchforge.yaml")]
+        config: PathBuf,
+        #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
+        token: Option<String>,
     },
     /// Print the SHA-256 hash used in server token configuration.
+    #[command(hide = true)]
     TokenHash {
         #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
         token: String,
     },
+    #[command(hide = true)]
     Diff {
         #[arg(long)]
         old: PathBuf,
@@ -78,12 +111,14 @@ enum Commands {
         #[arg(long)]
         output: PathBuf,
     },
+    #[command(hide = true)]
     Verify {
         #[arg(long)]
         file: PathBuf,
         #[arg(long)]
         sha256: String,
     },
+    #[command(hide = true)]
     Apply {
         #[arg(long)]
         old: PathBuf,
@@ -95,6 +130,7 @@ enum Commands {
         expected_sha256: Option<String>,
     },
     /// Create, verify, publish, and manifest-check a delta patch.
+    #[command(hide = true)]
     Publish {
         /// PatchForge server base URL.
         #[arg(long, default_value = "http://127.0.0.1:8080")]
@@ -154,6 +190,7 @@ enum Commands {
 #[derive(Subcommand)]
 enum ReleaseCommands {
     /// Create or select a release and save it as the project's active release.
+    #[command(hide = true)]
     Create {
         #[arg(long)]
         version: String,
@@ -171,6 +208,7 @@ enum ReleaseCommands {
 #[derive(Subcommand)]
 enum PatchCommands {
     /// Create and locally verify a BSDIFF patch without publishing it.
+    #[command(hide = true)]
     Create {
         #[arg(long)]
         old: PathBuf,
@@ -182,6 +220,7 @@ enum PatchCommands {
         architecture: String,
     },
     /// Create, upload, sign, and verify the next patch for the active release.
+    #[command(hide = true)]
     Release {
         #[arg(long)]
         old: PathBuf,
@@ -659,6 +698,29 @@ fn load_project_config(path: &Path) -> Result<ProjectConfig> {
     Ok(config)
 }
 
+fn flutter_project_version(path: &Path) -> Result<String> {
+    let source = fs::read_to_string(path).with_context(|| {
+        format!(
+            "Failed to read {}. Run from the Flutter project root or pass --version",
+            path.display()
+        )
+    })?;
+    let pubspec: serde_yaml::Value = serde_yaml::from_str(&source)
+        .with_context(|| format!("Invalid Flutter pubspec at {}", path.display()))?;
+    let declared = pubspec
+        .get("version")
+        .and_then(serde_yaml::Value::as_str)
+        .context("Flutter pubspec has no string version; pass --version")?;
+    let version = declared
+        .split_once('+')
+        .map_or(declared, |(value, _)| value)
+        .trim();
+    if version.is_empty() {
+        bail!("Flutter pubspec version is empty; pass --version");
+    }
+    Ok(version.to_string())
+}
+
 fn publisher_token(config: &ProjectConfig, override_token: Option<String>) -> Result<String> {
     let token = match override_token {
         Some(token) => token,
@@ -798,7 +860,7 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
     );
     println!("  channel: '{}'", project.channel);
     println!();
-    println!("Next: patchforge release create --version <installed-app-version>");
+    println!("Next: patchforge release");
     Ok(())
 }
 
@@ -865,7 +927,7 @@ fn create_or_select_release(
     println!("Channel: {}", config.channel);
     println!("Configuration updated: {}", config_path.display());
     println!();
-    println!("Next: patchforge patch release --old <base.apk> --new <target.apk>");
+    println!("Next: patchforge patch --old <base.apk> --new <target.apk>");
     Ok(())
 }
 
@@ -889,6 +951,49 @@ fn create_local_patch(old: &Path, new: &Path, output: &Path, architecture: &str)
     )?;
     println!("Local patch verified: {}", output.display());
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_project_patch(
+    config_path: &Path,
+    token_override: Option<String>,
+    old: &Path,
+    new: &Path,
+    architecture: &str,
+    rollout_percentage: i32,
+    manifest_version: i32,
+    patch_number: Option<i32>,
+    output: Option<&Path>,
+) -> Result<()> {
+    let project = load_project_config(config_path)?;
+    let token = publisher_token(&project, token_override)?;
+    let release_id = project.release_id.as_deref().context(
+        "No active release in patchforge.yaml. Run `patchforge release --version <installed-app-version>` first",
+    )?;
+    let version = project.release_version.as_deref().context(
+        "No active release version in patchforge.yaml. Run `patchforge release --version <installed-app-version>` first",
+    )?;
+    publish(PublishOptions {
+        server_url: &project.server_url,
+        token: &token,
+        app_id: &project.app_id,
+        release_id,
+        version,
+        platform: &project.platform,
+        channel: &project.channel,
+        rollout_percentage,
+        manifest_version,
+        old,
+        new,
+        architecture,
+        storage_dir: None,
+        ssh_target: None,
+        ssh_port: 22,
+        remote_storage_dir: None,
+        artifact_prefix: "patches",
+        patch_number,
+        output,
+    })
 }
 
 fn validation_device_id(app_id: &str, patch_id: &str, rollout_percentage: i32) -> Option<String> {
@@ -1449,29 +1554,64 @@ fn main() -> Result<()> {
             config_path: &config,
             force,
         })?,
-        Commands::Release { command } => match command {
-            ReleaseCommands::Create {
+        Commands::Release {
+            command,
+            version,
+            platform,
+            channel,
+            config,
+            token,
+        } => match command {
+            Some(ReleaseCommands::Create {
                 version,
                 platform,
                 channel,
                 config,
                 token,
-            } => create_or_select_release(
+            }) => create_or_select_release(
                 &config,
                 token,
                 &version,
                 platform.as_deref(),
                 channel.as_deref(),
             )?,
+            None => {
+                let version = match version {
+                    Some(version) => version,
+                    None => {
+                        let detected = flutter_project_version(Path::new("pubspec.yaml"))?;
+                        println!("Detected Flutter version {detected} from pubspec.yaml.");
+                        detected
+                    }
+                };
+                create_or_select_release(
+                    &config,
+                    token,
+                    &version,
+                    platform.as_deref(),
+                    channel.as_deref(),
+                )?;
+            }
         },
-        Commands::Patch { command } => match command {
-            PatchCommands::Create {
+        Commands::Patch {
+            command,
+            old,
+            new,
+            architecture,
+            rollout_percentage,
+            manifest_version,
+            patch_number,
+            output,
+            config,
+            token,
+        } => match command {
+            Some(PatchCommands::Create {
                 old,
                 new,
                 output,
                 architecture,
-            } => create_local_patch(&old, &new, &output, &architecture)?,
-            PatchCommands::Release {
+            }) => create_local_patch(&old, &new, &output, &architecture)?,
+            Some(PatchCommands::Release {
                 old,
                 new,
                 architecture,
@@ -1481,36 +1621,35 @@ fn main() -> Result<()> {
                 output,
                 config,
                 token,
-            } => {
-                let project = load_project_config(&config)?;
-                let token = publisher_token(&project, token)?;
-                let release_id = project.release_id.as_deref().context(
-                    "No active release in patchforge.yaml. Run `patchforge release create` first",
+            }) => publish_project_patch(
+                &config,
+                token,
+                &old,
+                &new,
+                &architecture,
+                rollout_percentage,
+                manifest_version,
+                patch_number,
+                output.as_deref(),
+            )?,
+            None => {
+                let old = old.context(
+                    "Missing --old. Usage: patchforge patch --old <base.apk> --new <target.apk>",
                 )?;
-                let version = project.release_version.as_deref().context(
-                    "No active release version in patchforge.yaml. Run `patchforge release create` first",
+                let new = new.context(
+                    "Missing --new. Usage: patchforge patch --old <base.apk> --new <target.apk>",
                 )?;
-                publish(PublishOptions {
-                    server_url: &project.server_url,
-                    token: &token,
-                    app_id: &project.app_id,
-                    release_id,
-                    version,
-                    platform: &project.platform,
-                    channel: &project.channel,
+                publish_project_patch(
+                    &config,
+                    token,
+                    &old,
+                    &new,
+                    &architecture,
                     rollout_percentage,
                     manifest_version,
-                    old: &old,
-                    new: &new,
-                    architecture: &architecture,
-                    storage_dir: None,
-                    ssh_target: None,
-                    ssh_port: 22,
-                    remote_storage_dir: None,
-                    artifact_prefix: "patches",
                     patch_number,
-                    output: output.as_deref(),
-                })?;
+                    output.as_deref(),
+                )?;
             }
         },
         Commands::TokenHash { token } => {
@@ -1573,13 +1712,13 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use std::path::Path;
 
     use super::{
         Cli, Commands, PatchCommands, ProjectConfig, ReleaseCommands, api_url, artifact_path,
-        load_project_config, normalize_server_url, save_project_config, sha256_reader,
-        validate_remote_storage_dir, validate_ssh_target,
+        flutter_project_version, load_project_config, normalize_server_url, save_project_config,
+        sha256_reader, validate_remote_storage_dir, validate_ssh_target,
     };
     use tempfile::TempDir;
 
@@ -1666,6 +1805,14 @@ mod tests {
     }
 
     #[test]
+    fn reads_device_version_name_from_flutter_pubspec() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("pubspec.yaml");
+        std::fs::write(&path, "name: example\nversion: 1.2.3+42\n").unwrap();
+        assert_eq!(flutter_project_version(&path).unwrap(), "1.2.3");
+    }
+
+    #[test]
     fn parses_config_driven_workflow_commands() {
         let init = Cli::try_parse_from([
             "patchforge",
@@ -1678,12 +1825,66 @@ mod tests {
         .unwrap();
         assert!(matches!(init.command, Commands::Init { .. }));
 
+        let release = Cli::try_parse_from(["patchforge", "release", "--version", "1.0.0"]).unwrap();
+        assert!(matches!(
+            release.command,
+            Commands::Release {
+                command: None,
+                version: Some(_),
+                ..
+            }
+        ));
+
+        let inferred_release = Cli::try_parse_from(["patchforge", "release"]).unwrap();
+        assert!(matches!(
+            inferred_release.command,
+            Commands::Release {
+                command: None,
+                version: None,
+                ..
+            }
+        ));
+
+        let patch = Cli::try_parse_from([
+            "patchforge",
+            "patch",
+            "--old",
+            "base.apk",
+            "--new",
+            "target.apk",
+        ])
+        .unwrap();
+        assert!(matches!(
+            patch.command,
+            Commands::Patch {
+                command: None,
+                old: Some(_),
+                new: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn top_level_help_focuses_on_the_three_step_workflow() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("init"));
+        assert!(help.contains("release"));
+        assert!(help.contains("patch"));
+        assert!(!help.contains("token-hash"));
+        assert!(!help.contains("publish"));
+        assert!(!help.contains("verify"));
+    }
+
+    #[test]
+    fn keeps_legacy_nested_workflow_commands_compatible() {
         let release =
             Cli::try_parse_from(["patchforge", "release", "create", "--version", "1.0.0"]).unwrap();
         assert!(matches!(
             release.command,
             Commands::Release {
-                command: ReleaseCommands::Create { .. }
+                command: Some(ReleaseCommands::Create { .. }),
+                ..
             }
         ));
 
@@ -1700,7 +1901,8 @@ mod tests {
         assert!(matches!(
             patch.command,
             Commands::Patch {
-                command: PatchCommands::Release { .. }
+                command: Some(PatchCommands::Release { .. }),
+                ..
             }
         ));
     }

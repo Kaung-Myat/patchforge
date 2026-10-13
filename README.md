@@ -123,14 +123,38 @@ under `~/.config/patchforge/credentials` with mode `0600`; it is never written
 to the project configuration.
 
 Copy the printed `baseUrl`, `appId`, `trustedPublicKeys`, and `channel` values
-into `PatchForgeConfig` in the Flutter app. Then create or select the release
-matching the version already installed on users' devices:
+into `PatchForgeConfig` in the Flutter app. The normal publisher workflow then
+uses three top-level commands: `init`, `release`, and `patch`.
+
+Create or select the release matching the version installed on users' devices:
 
 ```bash
-patchforge release create --version 1.0.0
+patchforge release
 ```
 
-Create and verify a delta locally when desired:
+`patchforge release` reads the version from the Flutter project's
+`pubspec.yaml` and removes the `+build-number` suffix so it matches
+`PackageInfo.version` on the device. Override detection when needed:
+
+```bash
+patchforge release --version 1.0.0
+```
+
+Publish the next patch using the project configuration and two artifact flags:
+
+```bash
+patchforge patch \
+  --old build/baseline.apk \
+  --new build/patched.apk
+```
+
+The patch command selects the correct parent patch, creates and reconstructs
+the delta, uploads it over authenticated HTTPS, creates the signed record, and
+verifies both the device manifest and public artifact download. The original
+`release create`, `patch create`, `patch release`, and low-level `publish`
+commands remain available for existing automation and advanced use cases.
+
+To create and verify a local delta without publishing it:
 
 ```bash
 patchforge patch create \
@@ -139,21 +163,6 @@ patchforge patch create \
   --architecture arm64-v8a \
   --output build/update.patch
 ```
-
-Publish the next patch using only the project configuration and artifact flags:
-
-```bash
-patchforge patch release \
-  --old build/baseline.apk \
-  --new build/patched.apk \
-  --architecture arm64-v8a \
-  --rollout-percentage 100
-```
-
-The release command selects the correct parent patch, creates and reconstructs
-the delta, uploads it over authenticated HTTPS, creates the signed record, and
-verifies both the device manifest and public artifact download. The original
-low-level `publish` command remains available for automation and compatibility.
 
 ## Publisher authentication
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Simplify the mobile publisher workflow to the top-level `patchforge init`,
+  `patchforge release`, and `patchforge patch` commands.
+- Detect the installed Flutter version name from `pubspec.yaml` when creating a
+  release, while keeping `--version` as an explicit override.
+- Retain the previous nested release and patch commands for backward
+  compatibility with existing scripts.
+
 ## 0.4.1
 
 - Redesign the web console as a flat CMS-style workspace with an expandable
