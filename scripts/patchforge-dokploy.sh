@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 INSTALL_DIR="${PATCHFORGE_INSTALL_DIR:-/opt/patchforge}"
 CONFIG_FILE="$INSTALL_DIR/dokploy.env"
+LEGACY_CONFIG_FILE="$INSTALL_DIR/config.env"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run with sudo: sudo patchforge-dokploy $*" >&2
@@ -31,6 +32,50 @@ container_for() {
   printf '%s' "$container"
 }
 
+env_value() {
+  local file="$1"
+  local key="$2"
+  local value
+
+  [[ -r "$file" ]] || return 1
+  value="$(sed -n "s/^${key}=//p" "$file" | tail -n 1)"
+  value="${value%$'\r'}"
+
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+
+  [[ -n "$value" ]] || return 1
+  printf '%s' "$value"
+}
+
+resolve_domain() {
+  local domain="${PATCHFORGE_DOMAIN:-}"
+  local rule
+
+  if [[ -z "$domain" ]]; then
+    domain="$(env_value "$LEGACY_CONFIG_FILE" PATCHFORGE_DOMAIN || true)"
+  fi
+
+  if [[ -z "$domain" ]]; then
+    rule="$(docker inspect "$(container_for server)" \
+      --format '{{ index .Config.Labels "traefik.http.routers.patchforge-ota-https.rule" }}')"
+    if [[ "$rule" =~ ^Host\(\`([A-Za-z0-9.-]+)\`\)$ ]]; then
+      domain="${BASH_REMATCH[1]}"
+    fi
+  fi
+
+  if [[ ! "$domain" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "Could not determine a valid PatchForge domain." >&2
+    echo "Set PATCHFORGE_DOMAIN in $CONFIG_FILE and try again." >&2
+    return 1
+  fi
+
+  printf '%s' "$domain"
+}
+
 show_status() {
   docker ps \
     --filter "label=dev.patchforge.stack=ota" \
@@ -40,6 +85,7 @@ show_status() {
 COMMAND="${1:-status}"
 case "$COMMAND" in
   status)
+    PATCHFORGE_DOMAIN="$(resolve_domain)"
     show_status
     echo
     curl -fsS "https://$PATCHFORGE_DOMAIN/health"
@@ -64,6 +110,7 @@ case "$COMMAND" in
     echo "Patch artifacts remain in: ${PATCHFORGE_STORAGE_DIR:-$INSTALL_DIR/storage}"
     ;;
   doctor)
+    PATCHFORGE_DOMAIN="$(resolve_domain)"
     show_status
     container_for server >/dev/null
     container_for postgres >/dev/null
