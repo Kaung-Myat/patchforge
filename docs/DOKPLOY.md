@@ -39,6 +39,12 @@ The helper is safe to run again: existing secrets are retained. It creates:
 Never paste the raw publisher token into Dokploy. The API receives only its
 SHA-256 hash from `dokploy.env`.
 
+After deployment, open `https://<PATCHFORGE_DOMAIN>/console/` and connect with
+the raw publisher token. The console is embedded in the server image and does
+not require another service. It can create applications and releases and show
+patch status; building and publishing binary deltas still happens on a trusted
+developer machine through the PatchForge CLI.
+
 ### 2. Create the Dokploy Compose service
 
 In Dokploy:

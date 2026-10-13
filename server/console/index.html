@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>PatchForge Console</title>
+    <link rel="stylesheet" href="/console/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="/console/" aria-label="PatchForge Console">
+          <span class="brand-mark" aria-hidden="true">PF</span>
+          <span><strong>PatchForge</strong><small>Self-hosted OTA console</small></span>
+        </a>
+        <div class="top-actions">
+          <span id="connectionBadge" class="badge muted">Not connected</span>
+          <button id="logoutButton" class="button ghost hidden" type="button">Disconnect</button>
+        </div>
+      </header>
+
+      <main>
+        <section id="loginPanel" class="login-layout">
+          <div>
+            <p class="eyebrow">YOUR SERVER, YOUR UPDATES</p>
+            <h1>Ship Flutter fixes from one calm place.</h1>
+            <p class="lead">Connect with the publisher token created during setup. It stays in this browser tab and is never written to persistent browser storage.</p>
+            <div class="feature-row">
+              <span>Signed manifests</span><span>Delta patches</span><span>Self-hosted</span>
+            </div>
+          </div>
+          <form id="loginForm" class="card auth-card">
+            <p class="eyebrow">CONSOLE ACCESS</p>
+            <h2>Connect to PatchForge</h2>
+            <label for="publisherToken">Publisher token</label>
+            <input id="publisherToken" name="publisherToken" type="password" autocomplete="off" required placeholder="pf_…">
+            <p class="hint">On the VPS, the installer stores it at <code>/opt/patchforge/secrets/publisher-token</code>.</p>
+            <button class="button primary" type="submit">Connect securely</button>
+            <p id="loginError" class="error hidden" role="alert"></p>
+          </form>
+        </section>
+
+        <section id="dashboard" class="hidden">
+          <div class="hero-row">
+            <div><p class="eyebrow">OVERVIEW</p><h1>Your OTA control room</h1><p class="lead">Create apps and releases, then use the CLI to build and publish verified patches.</p></div>
+            <button id="refreshButton" class="button secondary" type="button">Refresh</button>
+          </div>
+
+          <div id="stats" class="stats" aria-label="Server statistics"></div>
+
+          <div class="grid two-column">
+            <section class="card">
+              <div class="section-heading"><div><p class="eyebrow">PROJECTS</p><h2>Applications</h2></div><button id="showCreateApp" class="button compact" type="button">New app</button></div>
+              <form id="createAppForm" class="inline-form hidden">
+                <label for="appName">Application name</label>
+                <div><input id="appName" maxlength="100" required placeholder="Acme Mobile"><button class="button primary compact" type="submit">Create</button></div>
+              </form>
+              <div id="appsList" class="list"></div>
+            </section>
+
+            <section class="card">
+              <p class="eyebrow">MOBILE SETUP</p><h2 id="mobileSetupTitle">Select an app</h2>
+              <p class="hint">The generated values are safe for the mobile app. Keep the publisher token only on trusted developer machines and CI.</p>
+              <div class="code-group"><span>CLI initialization</span><pre id="initCommand">patchforge init --url https://your-server</pre><button id="copyInit" class="button ghost compact" type="button">Copy</button></div>
+              <dl class="details"><div><dt>App ID</dt><dd id="appIdValue">—</dd></div><div><dt>Signing key ID</dt><dd id="keyIdValue">—</dd></div><div><dt>Public key</dt><dd id="publicKeyValue" class="break">—</dd></div></dl>
+            </section>
+          </div>
+
+          <div class="grid two-column lower-grid">
+            <section class="card">
+              <div class="section-heading"><div><p class="eyebrow">RELEASES</p><h2 id="releasesTitle">Select an app</h2></div><button id="showCreateRelease" class="button compact hidden" type="button">New release</button></div>
+              <form id="createReleaseForm" class="form-grid hidden">
+                <label>Version<input id="releaseVersion" maxlength="50" required placeholder="1.2.0+42"></label>
+                <label>Channel<select id="releaseChannel"><option>development</option><option>staging</option><option>beta</option><option selected>stable</option></select></label>
+                <button class="button primary compact" type="submit">Create release</button>
+              </form>
+              <div id="releasesList" class="list"></div>
+            </section>
+
+            <section class="card">
+              <p class="eyebrow">PATCH CHAIN</p><h2 id="patchesTitle">Select a release</h2>
+              <div id="patchesList" class="table-wrap"><p class="empty">No release selected.</p></div>
+            </section>
+          </div>
+
+          <section class="card infrastructure">
+            <div><p class="eyebrow">INFRASTRUCTURE</p><h2>Server configuration</h2></div>
+            <dl id="infrastructureDetails" class="details horizontal"></dl>
+          </section>
+          <p id="dashboardError" class="error hidden" role="alert"></p>
+        </section>
+      </main>
+    </div>
+    <script src="/console/app.js" defer></script>
+  </body>
+</html>

@@ -16,9 +16,25 @@ pub async fn create_release(
     Path(app_id): Path<Uuid>,
     State(pool): State<PgPool>,
     Json(payload): Json<CreateReleaseRequest>,
-) -> Result<(StatusCode, Json<Release>), StatusCode> {
+) -> Result<(StatusCode, Json<Release>), (StatusCode, String)> {
+    let version = payload.version.trim();
+    if version.is_empty() || version.chars().count() > 50 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Release version must contain between 1 and 50 characters".to_string(),
+        ));
+    }
+    if payload.platform != "android" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Only the android platform is currently supported".to_string(),
+        ));
+    }
     if !is_supported_channel(&payload.channel) {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Unsupported release channel".to_string(),
+        ));
     }
 
     let release = sqlx::query_as::<_, Release>(
@@ -40,12 +56,28 @@ pub async fn create_release(
         "#,
     )
     .bind(app_id)
-    .bind(payload.version)
+    .bind(version)
     .bind(payload.platform)
     .bind(payload.channel)
     .fetch_one(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|error| {
+        eprintln!("Failed to create release: {error}");
+        if error
+            .as_database_error()
+            .is_some_and(|error| error.is_unique_violation())
+        {
+            (
+                StatusCode::CONFLICT,
+                "A release with this version, platform, and channel already exists".to_string(),
+            )
+        } else {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create release".to_string(),
+            )
+        }
+    })?;
 
     Ok((StatusCode::CREATED, Json(release)))
 }

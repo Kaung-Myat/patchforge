@@ -5,7 +5,15 @@ use sqlx::PgPool;
 pub async fn create_app(
     State(pool): State<PgPool>,
     Json(payload): Json<CreateAppRequest>,
-) -> Result<(StatusCode, Json<App>), StatusCode> {
+) -> Result<(StatusCode, Json<App>), (StatusCode, String)> {
+    let name = payload.name.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Application name must contain between 1 and 100 characters".to_string(),
+        ));
+    }
+
     let app = sqlx::query_as::<_, App>(
         r#"
         INSERT INTO apps (name)
@@ -13,10 +21,16 @@ pub async fn create_app(
         RETURNING id, name, created_at
         "#,
     )
-    .bind(payload.name)
+    .bind(name)
     .fetch_one(&pool)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|error| {
+        eprintln!("Failed to create application: {error}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to create application".to_string(),
+        )
+    })?;
 
     Ok((StatusCode::CREATED, Json(app)))
 }

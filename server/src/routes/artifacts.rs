@@ -53,6 +53,14 @@ impl ArtifactStorage {
         Ok(Self { root, max_size })
     }
 
+    pub(crate) fn provider_name(&self) -> &'static str {
+        "local"
+    }
+
+    pub(crate) fn max_size(&self) -> u64 {
+        self.max_size
+    }
+
     fn destination(&self, artifact_path: &str) -> Result<PathBuf, UploadError> {
         let Some(filename) = artifact_path.strip_prefix("patches/") else {
             return Err(UploadError::BadRequest(

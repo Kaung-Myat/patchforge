@@ -10,6 +10,7 @@ use axum::{
     Router,
     extract::{DefaultBodyLimit, Extension},
     middleware,
+    response::Redirect,
     routing::{get, post},
 };
 
@@ -22,11 +23,13 @@ use routes::{
     apps::{create_app, list_apps},
     artifacts::{ArtifactStorage, upload_artifact},
     audit_events::list_audit_events,
+    console,
     health::health,
     patches::{create_patch, list_patches},
     release_artifacts::{create_release_artifact, list_release_artifacts},
     releases::{create_release, list_releases},
     signing_keys::{list_signing_keys, revoke_signing_key},
+    system::system_info,
     updates::check_update,
 };
 use tower_http::services::ServeDir;
@@ -51,6 +54,7 @@ async fn main() {
     println!("Connected to PostgreSQL");
 
     let management_routes = Router::new()
+        .route("/api/v1/system", get(system_info))
         .route("/api/v1/apps", post(create_app).get(list_apps))
         .route(
             "/api/v1/apps/{app_id}/releases",
@@ -83,6 +87,10 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(root))
+        .route("/console", get(console_redirect))
+        .route("/console/", get(console::index))
+        .route("/console/app.js", get(console::javascript))
+        .route("/console/styles.css", get(console::stylesheet))
         .route("/health", get(health))
         .route("/api/v1/apps/{app_id}/updates", get(check_update))
         .nest_service("/artifacts", ServeDir::new(config.storage_dir))
@@ -104,6 +112,10 @@ async fn main() {
     .unwrap();
 }
 
-async fn root() -> &'static str {
-    "PatchForge OTA Server"
+async fn root() -> Redirect {
+    Redirect::temporary("/console/")
+}
+
+async fn console_redirect() -> Redirect {
+    Redirect::temporary("/console/")
 }

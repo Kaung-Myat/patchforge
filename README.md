@@ -40,6 +40,13 @@ stored with mode `0600` at
 SHA-256 hash. Copy that token once to the secured publisher workstation. The
 private signing key is mounted only into the API container as a Compose secret.
 
+Open `https://your-domain/console/` after installation to use the built-in web
+console. Connect with the raw publisher token to see server status, create apps
+and releases, copy the mobile initialization command, and inspect patch chains.
+The token is kept only in the current browser tab's session storage and is
+removed when you disconnect or close the tab. Patch creation and publication
+remain CLI operations because they require local Flutter build artifacts.
+
 Server images are published to
 `ghcr.io/kaung-myat/patchforge-server` by the GitHub Actions workflow whenever a
 `v*` tag is pushed. Deployments use the `latest` tag by default; set
@@ -64,6 +71,10 @@ Environment tab, and deploy. Verify the installation with:
 ```bash
 sudo patchforge-dokploy doctor
 ```
+
+The same built-in console is then available at
+`https://your-domain/console/`; no separate dashboard container or exposed
+database port is required.
 
 An existing standalone installation can also be moved to Dokploy while
 preserving its PostgreSQL data, signing identity, publisher credential, and

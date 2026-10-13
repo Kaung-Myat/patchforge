@@ -117,6 +117,16 @@ impl EdgeSecurity {
             "permissions-policy",
             HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
         );
+        headers.insert(
+            "content-security-policy",
+            HeaderValue::from_static(
+                "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+            ),
+        );
+        headers.insert(
+            "cross-origin-opener-policy",
+            HeaderValue::from_static("same-origin"),
+        );
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         if self.https_enabled {
             headers.insert(
@@ -201,6 +211,7 @@ pub async fn protect(
 #[cfg(test)]
 mod tests {
     use super::EdgeSecurity;
+    use axum::{body::Body, response::Response};
     use std::{
         collections::HashMap,
         sync::{Arc, Mutex},
@@ -243,5 +254,23 @@ mod tests {
         assert!(security.allow("127.0.0.1", "public", 2));
         assert!(security.allow("127.0.0.1", "public", 2));
         assert!(!security.allow("127.0.0.1", "public", 2));
+    }
+
+    #[test]
+    fn adds_browser_security_headers() {
+        let security = security();
+        let mut response = Response::new(Body::empty());
+
+        security.secure_response(&mut response);
+
+        assert_eq!(
+            response.headers()["content-security-policy"],
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+        );
+        assert_eq!(response.headers()["x-frame-options"], "DENY");
+        assert_eq!(
+            response.headers()["cross-origin-opener-policy"],
+            "same-origin"
+        );
     }
 }

@@ -2,6 +2,13 @@
 
 ## 0.4.0
 
+- Add a self-contained web console at `/console/` for connecting with a
+  publisher token, viewing server and storage status, creating apps and
+  releases, and inspecting published patch chains.
+- Add an authenticated `/api/v1/system` endpoint that reports public signing
+  information, capabilities, storage limits, and aggregate deployment stats.
+- Add strict browser security headers and validate console-created app and
+  release inputs server-side.
 - Add `patchforge init` to verify a self-hosted server, create or reuse an app,
   discover its active signing key, and generate a shareable project YAML file.
 - Store publisher credentials outside the project under the user's protected
