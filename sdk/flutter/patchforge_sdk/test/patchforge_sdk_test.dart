@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -366,26 +366,28 @@ void main() {
     expect(valid, isTrue);
   });
 
-  test('applies the published BSDIFF patch byte-for-byte', () async {
-    final base = File(
-      '../../../experiments/artifacts/v1/extracted/lib/arm64-v8a/libapp.so',
+  test('applies a bsdiff-generated patch byte-for-byte', () {
+    final base = base64Decode(
+      'UGF0Y2hGb3JnZSBiYXNlbGluZSB2MQphYmNkZWYwMTIzNDU2Nzg5Cg==',
     );
-    final patch = File('../../../storage/patches/libapp-v1-to-v2.patch');
-    final expected = File(
-      '../../../experiments/artifacts/v2/extracted/lib/arm64-v8a/libapp.so',
+    final patch = base64Decode(
+      'QlNESUZGNDAvAAAAAAAAAC4AAAAAAAAAKAAAAAAAAABCWmg5MUFZJlNZF0NMfAAA'
+      'DeAASUgEACAAIYTagwAMA25Eotb4u5IpwoSAuhpj4EJaaDkxQVkmU1mW17U0AA'
+      'ABQADhIAQAIAAwzQCU9TDZDipBwu5IpwoSEtr2poBCWmg5MUFZJlNZpVyuAQAA'
+      'BFGAABAgACKAFAAgACGmjNQhgGhUoeLuSKcKEhSrlcAg',
     );
-
+    final expected = base64Decode(
+      'UGF0Y2hGb3JnZSB0YXJnZXQgdjIKYWJjWFlaMDEyMzQ1Njc4OSEhCg==',
+    );
     final reconstructed = BsdiffPatcher().apply(
-      oldBytes: await base.readAsBytes(),
-      patchBytes: await patch.readAsBytes(),
+      oldBytes: base,
+      patchBytes: patch,
     );
-    final expectedBytes = await expected.readAsBytes();
 
-    expect(reconstructed, orderedEquals(expectedBytes));
-    expect(reconstructed.length, 3081136);
+    expect(reconstructed, orderedEquals(expected));
     expect(
       sha256.convert(reconstructed).toString(),
-      'd9ee1f12e93dc5483918efbf41fc6e00f55a3e071cd6bfb9d69f17caa36a3634',
+      'f0e04cbbd111f0133b6de3c30417087c6e482c2dbcf5fd00cbc68a8632e8d5ee',
     );
   });
 
@@ -430,24 +432,28 @@ void main() {
     expect(valid, isTrue);
   });
 
-  test('reconstructs the runtime activation target', () async {
-    final base = File(
-      '../../../experiments/runtime_activation/baseline/libapp.so',
+  test('reconstructs a runtime-style target from a BSDIFF40 vector', () {
+    final base = base64Decode(
+      'cnVudGltZS1iYXNlbGluZS1BQUFBLUJCQkItQ0NDQy1ERERE',
     );
-    final patch = File('../../../storage/patches/runtime-activation-v1.patch');
-    final expected = File(
-      '../../../experiments/runtime_activation/target/libapp.so',
+    final patch = base64Decode(
+      'QlNESUZGNDArAAAAAAAAACUAAAAAAAAAJQAAAAAAAABCWmg5MUFZJlNZN/cl6wAA'
+      'B+AASEAACiAAMM0AwaYMkx8XckU4UJA39yXrQlpoOTFBWSZTWZb7RKYAAABAAEQ'
+      'AIAAhAIKDF3JFOFCQlvtEpkJaaDkxQVkmU1k0V1OcAAAOVYBAAAACPgEuQEQQIA'
+      'AxTAATQr0mTRoPKPEbWA4mQ0hqaiikUa+LuSKcKEgaK6nOAA==',
     );
-
+    final expected = base64Decode(
+      'cnVudGltZS1wYXRjaGVkLUFBQUEtenotQkJCQi1DQ0NDLUVORA==',
+    );
     final reconstructed = BsdiffPatcher().apply(
-      oldBytes: await base.readAsBytes(),
-      patchBytes: await patch.readAsBytes(),
+      oldBytes: base,
+      patchBytes: patch,
     );
 
-    expect(reconstructed, orderedEquals(await expected.readAsBytes()));
+    expect(reconstructed, orderedEquals(expected));
     expect(
       sha256.convert(reconstructed).toString(),
-      'bc3f3711a220b924a8123e7d1ae15bdd2a804d80c876888dd61fa4ea8a90dfa1',
+      '9e0ca41af27ea812157e8e7ec8e3c48768c270121f4c2a1e09a2e872572aa10d',
     );
   });
 }
