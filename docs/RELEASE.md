@@ -33,7 +33,7 @@ docker compose -f deploy/dokploy.compose.yaml config --quiet
 
 ## 2. Confirm versions and release notes
 
-For `v0.3.0`, these files must all declare `0.3.0`:
+For `v0.4.0`, these files must all declare `0.4.0`:
 
 - `server/Cargo.toml`
 - `cli/Cargo.toml`
@@ -47,23 +47,21 @@ on `main`.
 ## 3. Create the release tag
 
 ```bash
-git tag -a v0.3.0 -m "PatchForge v0.3.0"
-git push origin v0.3.0
+git tag -a v0.4.0 -m "PatchForge v0.4.0"
+git push origin v0.4.0
 ```
 
 The tag starts the `Publish server image` workflow. Wait until it publishes:
 
 ```text
-ghcr.io/kaung-myat/patchforge-server:0.3.0
+ghcr.io/kaung-myat/patchforge-server:0.4.0
 ```
 
-Do not update a production deployment until this image exists.
+The separate `Publish CLI` workflow must also attach the CLI archive and its
+SHA-256 file to the GitHub release. Do not update a production deployment or
+advertise the CLI installer until both workflows succeed.
 
 ## 4. Upgrade the test VPS
-
-For the 0.3.0 upgrade, first make the existing artifact directories writable
-by the unprivileged API container as documented in `docs/DOKPLOY.md`. This is a
-one-time permission migration from the former SSH publishing flow.
 
 Change `PATCHFORGE_SERVER_IMAGE` in the Dokploy Environment tab to the new
 version, save, and deploy. Do not use the old standalone `patchforge update`

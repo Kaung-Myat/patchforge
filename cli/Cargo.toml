@@ -1,6 +1,6 @@
 [package]
 name = "patchforge"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -11,6 +11,7 @@ hex = "0.4.3"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_yaml = "0.9"
 sha2 = "0.11.0"
 tempfile = "3"
 zip = { version = "2", default-features = false, features = ["deflate"] }

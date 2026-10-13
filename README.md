@@ -74,6 +74,76 @@ For production, select a release tag in Dokploy and pin
 `PATCHFORGE_SERVER_IMAGE` to the matching image version instead of `latest`.
 See [docs/RELEASE.md](docs/RELEASE.md) for the release checklist.
 
+## Initialize a Flutter project
+
+Release tags publish a Linux amd64 CLI archive and checksum. Install the latest
+CLI as the current user (or run the reviewed script with `sudo` to install under
+`/usr/local/bin`):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/Kaung-Myat/patchforge/main/scripts/install-cli.sh
+less install-cli.sh
+bash install-cli.sh
+```
+
+From a source checkout, use `cargo install --path cli --locked` instead.
+Install `bsdiff` on the publisher workstation before creating patches.
+
+The server administrator gives the mobile developer the public server URL and
+publisher token. Initialize the Flutter project without placing the token in
+shell history:
+
+```bash
+read -rsp "PatchForge publisher token: " PATCHFORGE_TOKEN
+echo
+export PATCHFORGE_TOKEN
+
+patchforge init \
+  --url https://updates.example.com \
+  --app-name com.example.my_app
+
+unset PATCHFORGE_TOKEN
+```
+
+`patchforge init` verifies server health and authentication, creates or reuses
+the named app, discovers the active Ed25519 public key, and writes a shareable
+`patchforge.yaml` in the project. The raw publisher token is stored separately
+under `~/.config/patchforge/credentials` with mode `0600`; it is never written
+to the project configuration.
+
+Copy the printed `baseUrl`, `appId`, `trustedPublicKeys`, and `channel` values
+into `PatchForgeConfig` in the Flutter app. Then create or select the release
+matching the version already installed on users' devices:
+
+```bash
+patchforge release create --version 1.0.0
+```
+
+Create and verify a delta locally when desired:
+
+```bash
+patchforge patch create \
+  --old build/baseline.apk \
+  --new build/patched.apk \
+  --architecture arm64-v8a \
+  --output build/update.patch
+```
+
+Publish the next patch using only the project configuration and artifact flags:
+
+```bash
+patchforge patch release \
+  --old build/baseline.apk \
+  --new build/patched.apk \
+  --architecture arm64-v8a \
+  --rollout-percentage 100
+```
+
+The release command selects the correct parent patch, creates and reconstructs
+the delta, uploads it over authenticated HTTPS, creates the signed record, and
+verifies both the device manifest and public artifact download. The original
+low-level `publish` command remains available for automation and compatibility.
+
 ## Publisher authentication
 
 All management endpoints for apps, releases, and patches require an HTTP

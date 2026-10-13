@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Add `patchforge init` to verify a self-hosted server, create or reuse an app,
+  discover its active signing key, and generate a shareable project YAML file.
+- Store publisher credentials outside the project under the user's protected
+  configuration directory instead of placing raw tokens in project files.
+- Add config-driven `patchforge release create`, `patchforge patch create`, and
+  `patchforge patch release` workflows while retaining the low-level commands.
+- Publish a checksummed Linux amd64 CLI archive with each GitHub release and add
+  a standalone CLI installer.
+
 ## 0.3.0
 
 - Add authenticated, streamed HTTPS patch uploads with server-side SHA-256 and

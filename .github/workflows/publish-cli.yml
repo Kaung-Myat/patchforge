@@ -1,0 +1,43 @@
+name: Publish CLI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+
+      - name: Build CLI
+        working-directory: cli
+        run: cargo build --release --locked
+
+      - name: Package CLI
+        run: |
+          mkdir -p dist/patchforge-linux-amd64
+          install -m 0755 cli/target/release/patchforge dist/patchforge-linux-amd64/patchforge
+          tar -C dist -czf dist/patchforge-linux-amd64.tar.gz patchforge-linux-amd64
+          sha256sum dist/patchforge-linux-amd64.tar.gz > dist/patchforge-linux-amd64.tar.gz.sha256
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/patchforge-linux-amd64.tar.gz
+            dist/patchforge-linux-amd64.tar.gz.sha256

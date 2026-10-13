@@ -3,7 +3,10 @@ use clap::{Parser, Subcommand};
 use reqwest::blocking::{Client, Response};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
+    env,
     fs::{self, File, OpenOptions},
     io::{self, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -16,6 +19,7 @@ use zip::ZipArchive;
 #[derive(Parser)]
 #[command(name = "patchforge")]
 #[command(about = "PatchForge OTA patch tooling")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -26,6 +30,41 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
+    /// Connect this Flutter project to a PatchForge server.
+    Init {
+        /// Public HTTPS URL of the PatchForge server.
+        #[arg(long)]
+        url: String,
+        /// Publisher token. PATCHFORGE_TOKEN is recommended for automation.
+        #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
+        token: String,
+        /// App name to create or reuse when --app-id is omitted.
+        #[arg(long, default_value = "PatchForge App")]
+        app_name: String,
+        /// Reuse a specific existing app instead of selecting by name.
+        #[arg(long)]
+        app_id: Option<String>,
+        #[arg(long, default_value = "android")]
+        platform: String,
+        #[arg(long, default_value = "stable")]
+        channel: String,
+        /// Project configuration file to create.
+        #[arg(long, default_value = "patchforge.yaml")]
+        config: PathBuf,
+        /// Replace an existing project configuration.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Create or select a server release for this project.
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommands,
+    },
+    /// Create or publish OTA patches using the project configuration.
+    Patch {
+        #[command(subcommand)]
+        command: PatchCommands,
+    },
     /// Print the SHA-256 hash used in server token configuration.
     TokenHash {
         #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
@@ -110,6 +149,108 @@ enum Commands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ReleaseCommands {
+    /// Create or select a release and save it as the project's active release.
+    Create {
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        platform: Option<String>,
+        #[arg(long)]
+        channel: Option<String>,
+        #[arg(long, default_value = "patchforge.yaml")]
+        config: PathBuf,
+        #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PatchCommands {
+    /// Create and locally verify a BSDIFF patch without publishing it.
+    Create {
+        #[arg(long)]
+        old: PathBuf,
+        #[arg(long)]
+        new: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "arm64-v8a")]
+        architecture: String,
+    },
+    /// Create, upload, sign, and verify the next patch for the active release.
+    Release {
+        #[arg(long)]
+        old: PathBuf,
+        #[arg(long)]
+        new: PathBuf,
+        #[arg(long, default_value = "arm64-v8a")]
+        architecture: String,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(i32).range(0..=100))]
+        rollout_percentage: i32,
+        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(i32).range(1..=2))]
+        manifest_version: i32,
+        #[arg(long)]
+        patch_number: Option<i32>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long, default_value = "patchforge.yaml")]
+        config: PathBuf,
+        #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ProjectConfig {
+    schema_version: u32,
+    server_url: String,
+    app_id: String,
+    app_name: String,
+    platform: String,
+    channel: String,
+    signing_key_id: String,
+    signing_public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AppRecord {
+    id: String,
+    name: String,
+}
+
+#[derive(Serialize)]
+struct CreateAppRequest<'a> {
+    name: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseRecord {
+    id: String,
+    version: String,
+    platform: String,
+    channel: String,
+}
+
+#[derive(Serialize)]
+struct CreateReleaseRequest<'a> {
+    version: &'a str,
+    platform: &'a str,
+    channel: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct SigningKeyRecord {
+    key_id: String,
+    public_key_base64: String,
+    status: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,6 +355,17 @@ struct PublishOptions<'a> {
     artifact_prefix: &'a str,
     patch_number: Option<i32>,
     output: Option<&'a Path>,
+}
+
+struct InitOptions<'a> {
+    server_url: &'a str,
+    token: &'a str,
+    app_name: &'a str,
+    app_id: Option<&'a str>,
+    platform: &'a str,
+    channel: &'a str,
+    config_path: &'a Path,
+    force: bool,
 }
 
 fn sha256_reader(mut reader: impl Read) -> Result<String> {
@@ -396,6 +548,347 @@ fn is_supported_android_architecture(value: &str) -> bool {
 
 fn is_supported_channel(value: &str) -> bool {
     matches!(value, "development" | "staging" | "beta" | "stable")
+}
+
+fn normalize_server_url(value: &str) -> Result<String> {
+    let url = reqwest::Url::parse(value).context("Server URL is invalid")?;
+    let local_http =
+        url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+    if url.scheme() != "https" && !local_http {
+        bail!("Server URL must use HTTPS (plain HTTP is allowed only for localhost)");
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        bail!("Server URL must be an origin without credentials, path, query, or fragment");
+    }
+    Ok(value.trim_end_matches('/').to_string())
+}
+
+fn patchforge_config_home() -> Result<PathBuf> {
+    if let Some(path) = env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path).join("patchforge"));
+    }
+    env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| path.join(".config/patchforge"))
+        .context("HOME or XDG_CONFIG_HOME must be set to store publisher credentials")
+}
+
+fn credential_path(server_url: &str, app_id: &str) -> Result<PathBuf> {
+    let server_fingerprint = hex::encode(Sha256::digest(server_url.as_bytes()));
+    Ok(patchforge_config_home()?
+        .join("credentials")
+        .join(format!("{}-{app_id}.token", &server_fingerprint[..16])))
+}
+
+fn write_private_token(path: &Path, token: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("Publisher token path has no parent")?;
+    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
+    #[cfg(unix)]
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    file.write_all(token.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+fn save_project_config(path: &Path, config: &ProjectConfig, replace: bool) -> Result<()> {
+    if path.exists() && !replace {
+        bail!(
+            "Configuration already exists at {}. Use --force to replace it",
+            path.display()
+        );
+    }
+    if let Some(parent) = path.parent().filter(|value| !value.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)?;
+    }
+    let yaml = serde_yaml::to_string(config)?;
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(yaml.as_bytes())?;
+    temporary.flush()?;
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("Failed to save {}", path.display()))?;
+    Ok(())
+}
+
+fn load_project_config(path: &Path) -> Result<ProjectConfig> {
+    let source = fs::read_to_string(path).with_context(|| {
+        format!(
+            "Failed to read {}. Run `patchforge init` first",
+            path.display()
+        )
+    })?;
+    let config: ProjectConfig = serde_yaml::from_str(&source)
+        .with_context(|| format!("Invalid PatchForge configuration in {}", path.display()))?;
+    if config.schema_version != 1 {
+        bail!(
+            "Unsupported PatchForge configuration schema {}",
+            config.schema_version
+        );
+    }
+    normalize_server_url(&config.server_url)?;
+    if !is_supported_channel(&config.channel) {
+        bail!("Unsupported channel '{}' in configuration", config.channel);
+    }
+    Ok(config)
+}
+
+fn publisher_token(config: &ProjectConfig, override_token: Option<String>) -> Result<String> {
+    let token = match override_token {
+        Some(token) => token,
+        None => {
+            let publisher_token_file = credential_path(&config.server_url, &config.app_id)?;
+            #[cfg(unix)]
+            {
+                let mode = fs::metadata(&publisher_token_file)?.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    bail!(
+                        "Publisher token file must not be accessible by group or others: {}",
+                        publisher_token_file.display()
+                    );
+                }
+            }
+            fs::read_to_string(&publisher_token_file).with_context(|| {
+                format!(
+                    "Failed to read publisher credential {}",
+                    publisher_token_file.display()
+                )
+            })?
+        }
+    };
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        bail!("Publisher token is empty");
+    }
+    Ok(token)
+}
+
+fn initialize_project(options: InitOptions<'_>) -> Result<()> {
+    if options.config_path.exists() && !options.force {
+        bail!(
+            "Configuration already exists at {}. Use --force to replace it",
+            options.config_path.display()
+        );
+    }
+    let server_url = normalize_server_url(options.server_url)?;
+    if options.app_name.trim().is_empty() || options.app_name.chars().count() > 100 {
+        bail!("App name must contain between 1 and 100 characters");
+    }
+    if options.platform != "android" {
+        bail!("PatchForge currently supports the android platform only");
+    }
+    if !is_supported_channel(options.channel) {
+        bail!("Unsupported channel '{}'", options.channel);
+    }
+
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    checked_response(
+        client.get(api_url(&server_url, "health")).send()?,
+        "Checking PatchForge server health",
+    )?;
+    let apps_url = api_url(&server_url, "api/v1/apps");
+    let apps: Vec<AppRecord> = checked_response(
+        client.get(&apps_url).bearer_auth(options.token).send()?,
+        "Reading server apps",
+    )?
+    .json()?;
+    let app = if let Some(app_id) = options.app_id {
+        apps.into_iter()
+            .find(|app| app.id == app_id)
+            .with_context(|| format!("App {app_id} does not exist on this server"))?
+    } else {
+        let matches: Vec<AppRecord> = apps
+            .into_iter()
+            .filter(|app| app.name == options.app_name.trim())
+            .collect();
+        match matches.len() {
+            0 => checked_response(
+                client
+                    .post(&apps_url)
+                    .bearer_auth(options.token)
+                    .json(&CreateAppRequest {
+                        name: options.app_name.trim(),
+                    })
+                    .send()?,
+                "Creating PatchForge app",
+            )?
+            .json()?,
+            1 => matches.into_iter().next().expect("one app match"),
+            _ => bail!(
+                "More than one app is named '{}'; rerun with --app-id",
+                options.app_name
+            ),
+        }
+    };
+
+    let signing_keys: Vec<SigningKeyRecord> = checked_response(
+        client
+            .get(api_url(&server_url, "api/v1/signing-keys"))
+            .bearer_auth(options.token)
+            .send()?,
+        "Reading signing keys",
+    )?
+    .json()?;
+    let mut active_keys = signing_keys
+        .into_iter()
+        .filter(|key| key.status == "active");
+    let signing_key = active_keys
+        .next()
+        .context("Server has no active signing key")?;
+    if active_keys.next().is_some() {
+        bail!("Server returned more than one active signing key");
+    }
+
+    let publisher_token_file = credential_path(&server_url, &app.id)?;
+    write_private_token(&publisher_token_file, options.token)?;
+    let project = ProjectConfig {
+        schema_version: 1,
+        server_url,
+        app_id: app.id,
+        app_name: app.name,
+        platform: options.platform.to_string(),
+        channel: options.channel.to_string(),
+        signing_key_id: signing_key.key_id,
+        signing_public_key: signing_key.public_key_base64,
+        release_id: None,
+        release_version: None,
+    };
+    save_project_config(options.config_path, &project, options.force)?;
+
+    println!("PatchForge project initialized.");
+    println!("Configuration: {}", options.config_path.display());
+    println!("Server: {}", project.server_url);
+    println!("App: {} ({})", project.app_name, project.app_id);
+    println!("Channel: {}", project.channel);
+    println!("Signing key: {}", project.signing_key_id);
+    println!("Publisher credential: {}", publisher_token_file.display());
+    println!();
+    println!("Flutter SDK values:");
+    println!("  baseUrl: '{}'", project.server_url);
+    println!("  appId: '{}'", project.app_id);
+    println!(
+        "  trustedPublicKeys: {{'{}': '{}'}}",
+        project.signing_key_id, project.signing_public_key
+    );
+    println!("  channel: '{}'", project.channel);
+    println!();
+    println!("Next: patchforge release create --version <installed-app-version>");
+    Ok(())
+}
+
+fn create_or_select_release(
+    config_path: &Path,
+    token_override: Option<String>,
+    version: &str,
+    platform_override: Option<&str>,
+    channel_override: Option<&str>,
+) -> Result<()> {
+    if version.trim().is_empty() {
+        bail!("Release version cannot be empty");
+    }
+    let mut config = load_project_config(config_path)?;
+    let token = publisher_token(&config, token_override)?;
+    let platform = platform_override.unwrap_or(&config.platform);
+    let channel = channel_override.unwrap_or(&config.channel);
+    if platform != "android" {
+        bail!("PatchForge currently supports the android platform only");
+    }
+    if !is_supported_channel(channel) {
+        bail!("Unsupported channel '{channel}'");
+    }
+
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let releases_url = api_url(
+        &config.server_url,
+        &format!("api/v1/apps/{}/releases", config.app_id),
+    );
+    let releases: Vec<ReleaseRecord> = checked_response(
+        client.get(&releases_url).bearer_auth(&token).send()?,
+        "Reading app releases",
+    )?
+    .json()?;
+    let release = match releases.into_iter().find(|release| {
+        release.version == version && release.platform == platform && release.channel == channel
+    }) {
+        Some(release) => {
+            println!("Using existing release {}.", release.id);
+            release
+        }
+        None => checked_response(
+            client
+                .post(&releases_url)
+                .bearer_auth(&token)
+                .json(&CreateReleaseRequest {
+                    version,
+                    platform,
+                    channel,
+                })
+                .send()?,
+            "Creating release",
+        )?
+        .json()?,
+    };
+    config.platform = release.platform;
+    config.channel = release.channel;
+    config.release_id = Some(release.id.clone());
+    config.release_version = Some(release.version.clone());
+    save_project_config(config_path, &config, true)?;
+    println!("Active release: {}", release.id);
+    println!("Version: {}", release.version);
+    println!("Platform: {}", config.platform);
+    println!("Channel: {}", config.channel);
+    println!("Configuration updated: {}", config_path.display());
+    println!();
+    println!("Next: patchforge patch release --old <base.apk> --new <target.apk>");
+    Ok(())
+}
+
+fn create_local_patch(old: &Path, new: &Path, output: &Path, architecture: &str) -> Result<()> {
+    if !is_supported_android_architecture(architecture) {
+        bail!("Unsupported architecture '{architecture}'");
+    }
+    if output.exists() {
+        bail!("Refusing to overwrite existing patch {}", output.display());
+    }
+    let temp = TempDir::new()?;
+    let base = resolve_artifact(old, architecture, &temp.path().join("base-libapp.so"))?;
+    let target = resolve_artifact(new, architecture, &temp.path().join("target-libapp.so"))?;
+    let target_hash = sha256_file(&target)?;
+    create_diff(&base, &target, output)?;
+    apply_patch(
+        &base,
+        output,
+        &temp.path().join("reconstructed-libapp.so"),
+        Some(&target_hash),
+    )?;
+    println!("Local patch verified: {}", output.display());
+    Ok(())
 }
 
 fn validation_device_id(app_id: &str, patch_id: &str, rollout_percentage: i32) -> Option<String> {
@@ -937,6 +1430,89 @@ fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let cli = Cli::parse();
     match cli.command {
+        Commands::Init {
+            url,
+            token,
+            app_name,
+            app_id,
+            platform,
+            channel,
+            config,
+            force,
+        } => initialize_project(InitOptions {
+            server_url: &url,
+            token: &token,
+            app_name: &app_name,
+            app_id: app_id.as_deref(),
+            platform: &platform,
+            channel: &channel,
+            config_path: &config,
+            force,
+        })?,
+        Commands::Release { command } => match command {
+            ReleaseCommands::Create {
+                version,
+                platform,
+                channel,
+                config,
+                token,
+            } => create_or_select_release(
+                &config,
+                token,
+                &version,
+                platform.as_deref(),
+                channel.as_deref(),
+            )?,
+        },
+        Commands::Patch { command } => match command {
+            PatchCommands::Create {
+                old,
+                new,
+                output,
+                architecture,
+            } => create_local_patch(&old, &new, &output, &architecture)?,
+            PatchCommands::Release {
+                old,
+                new,
+                architecture,
+                rollout_percentage,
+                manifest_version,
+                patch_number,
+                output,
+                config,
+                token,
+            } => {
+                let project = load_project_config(&config)?;
+                let token = publisher_token(&project, token)?;
+                let release_id = project.release_id.as_deref().context(
+                    "No active release in patchforge.yaml. Run `patchforge release create` first",
+                )?;
+                let version = project.release_version.as_deref().context(
+                    "No active release version in patchforge.yaml. Run `patchforge release create` first",
+                )?;
+                publish(PublishOptions {
+                    server_url: &project.server_url,
+                    token: &token,
+                    app_id: &project.app_id,
+                    release_id,
+                    version,
+                    platform: &project.platform,
+                    channel: &project.channel,
+                    rollout_percentage,
+                    manifest_version,
+                    old: &old,
+                    new: &new,
+                    architecture: &architecture,
+                    storage_dir: None,
+                    ssh_target: None,
+                    ssh_port: 22,
+                    remote_storage_dir: None,
+                    artifact_prefix: "patches",
+                    patch_number,
+                    output: output.as_deref(),
+                })?;
+            }
+        },
         Commands::TokenHash { token } => {
             println!("{}", hex::encode(Sha256::digest(token.as_bytes())));
         }
@@ -997,11 +1573,15 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     use std::path::Path;
 
     use super::{
-        api_url, artifact_path, sha256_reader, validate_remote_storage_dir, validate_ssh_target,
+        Cli, Commands, PatchCommands, ProjectConfig, ReleaseCommands, api_url, artifact_path,
+        load_project_config, normalize_server_url, save_project_config, sha256_reader,
+        validate_remote_storage_dir, validate_ssh_target,
     };
+    use tempfile::TempDir;
 
     #[test]
     fn joins_api_urls_without_duplicate_slashes() {
@@ -1041,5 +1621,87 @@ mod tests {
         assert!(validate_ssh_target("host;touch/tmp/pwned").is_err());
         assert!(validate_remote_storage_dir(Path::new("/srv/../tmp")).is_err());
         assert!(validate_remote_storage_dir(Path::new("relative/storage")).is_err());
+    }
+
+    #[test]
+    fn requires_https_except_for_local_development() {
+        assert_eq!(
+            normalize_server_url("https://updates.example.com/").unwrap(),
+            "https://updates.example.com"
+        );
+        assert_eq!(
+            normalize_server_url("http://127.0.0.1:8080").unwrap(),
+            "http://127.0.0.1:8080"
+        );
+        assert!(normalize_server_url("http://updates.example.com").is_err());
+        assert!(normalize_server_url("https://updates.example.com/api").is_err());
+        assert!(normalize_server_url("https://user:secret@updates.example.com").is_err());
+    }
+
+    #[test]
+    fn round_trips_project_configuration_without_a_raw_token() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("patchforge.yaml");
+        let expected = ProjectConfig {
+            schema_version: 1,
+            server_url: "https://updates.example.com".to_string(),
+            app_id: "app-id".to_string(),
+            app_name: "Example".to_string(),
+            platform: "android".to_string(),
+            channel: "stable".to_string(),
+            signing_key_id: "main-2026".to_string(),
+            signing_public_key: "public-key".to_string(),
+            release_id: Some("release-id".to_string()),
+            release_version: Some("1.0.0".to_string()),
+        };
+
+        save_project_config(&path, &expected, false).unwrap();
+        let yaml = std::fs::read_to_string(&path).unwrap();
+        assert!(!yaml.contains("raw-publisher-secret"));
+        let actual = load_project_config(&path).unwrap();
+        assert_eq!(actual.server_url, expected.server_url);
+        assert_eq!(actual.app_id, expected.app_id);
+        assert_eq!(actual.release_id, expected.release_id);
+        assert!(save_project_config(&path, &expected, false).is_err());
+    }
+
+    #[test]
+    fn parses_config_driven_workflow_commands() {
+        let init = Cli::try_parse_from([
+            "patchforge",
+            "init",
+            "--url",
+            "https://updates.example.com",
+            "--token",
+            "secret",
+        ])
+        .unwrap();
+        assert!(matches!(init.command, Commands::Init { .. }));
+
+        let release =
+            Cli::try_parse_from(["patchforge", "release", "create", "--version", "1.0.0"]).unwrap();
+        assert!(matches!(
+            release.command,
+            Commands::Release {
+                command: ReleaseCommands::Create { .. }
+            }
+        ));
+
+        let patch = Cli::try_parse_from([
+            "patchforge",
+            "patch",
+            "release",
+            "--old",
+            "base.apk",
+            "--new",
+            "target.apk",
+        ])
+        .unwrap();
+        assert!(matches!(
+            patch.command,
+            Commands::Patch {
+                command: PatchCommands::Release { .. }
+            }
+        ));
     }
 }

@@ -1,3 +1,8 @@
+## 0.4.0
+
+- Align the SDK release with the project initialization and config-driven
+  publishing workflow in PatchForge CLI 0.4.0. Runtime APIs remain compatible.
+
 ## 0.3.0
 
 - Align the SDK release with the authenticated HTTPS publishing protocol in
