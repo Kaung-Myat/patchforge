@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+
+- Redesign the web console as a flat CMS-style workspace with an expandable
+  sidebar, consistent navigation hierarchy, responsive sections, and no
+  gradients or drop shadows.
+- Add a real 14-day patch-publishing line chart backed by PostgreSQL activity
+  data from the authenticated system endpoint.
+- Reduce repeated dashboard copy and replace the visible copy control with a
+  compact accessible action.
+
 ## 0.4.0
 
 - Add a self-contained web console at `/console/` for connecting with a

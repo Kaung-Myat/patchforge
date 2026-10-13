@@ -11,6 +11,7 @@ pub struct SystemInfo {
     storage: StorageInfo,
     signing: ActiveSigningKey,
     stats: SystemStats,
+    activity: Vec<ActivityPoint>,
     supported_channels: [&'static str; 4],
     supported_architectures: [&'static str; 3],
 }
@@ -35,6 +36,12 @@ struct SystemStats {
     artifact_bytes: i64,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct ActivityPoint {
+    day: String,
+    patches: i64,
+}
+
 pub async fn system_info(
     State(pool): State<PgPool>,
     Extension(storage): Extension<ArtifactStorage>,
@@ -56,12 +63,30 @@ pub async fn system_info(
     })?
     .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    let (apps, releases, patches, artifact_bytes) = tokio::try_join!(
+    let (apps, releases, patches, artifact_bytes, activity) = tokio::try_join!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM apps").fetch_one(&pool),
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM releases").fetch_one(&pool),
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM patches").fetch_one(&pool),
         sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(file_size), 0)::BIGINT FROM patches",)
             .fetch_one(&pool),
+        sqlx::query_as::<_, ActivityPoint>(
+            r#"
+            SELECT
+                TO_CHAR(days.day, 'YYYY-MM-DD') AS day,
+                COUNT(patches.id)::BIGINT AS patches
+            FROM GENERATE_SERIES(
+                CURRENT_DATE - 13,
+                CURRENT_DATE,
+                INTERVAL '1 day'
+            ) AS days(day)
+            LEFT JOIN patches
+                ON patches.created_at >= days.day
+                AND patches.created_at < days.day + INTERVAL '1 day'
+            GROUP BY days.day
+            ORDER BY days.day
+            "#,
+        )
+        .fetch_all(&pool),
     )
     .map_err(|error| {
         eprintln!("Failed to read system statistics: {error}");
@@ -82,6 +107,7 @@ pub async fn system_info(
             patches,
             artifact_bytes,
         },
+        activity,
         supported_channels: ["development", "staging", "beta", "stable"],
         supported_architectures: ["arm64-v8a", "armeabi-v7a", "x86_64"],
     }))

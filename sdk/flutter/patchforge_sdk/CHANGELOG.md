@@ -1,3 +1,8 @@
+## 0.4.1
+
+- Keep the Flutter runtime package version aligned with the PatchForge 0.4.1
+  server and CLI release. Runtime behavior remains compatible with 0.4.0.
+
 ## 0.4.0
 
 - Align the SDK release with the project initialization and config-driven

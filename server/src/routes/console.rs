@@ -36,8 +36,13 @@ mod tests {
         assert!(INDEX_HTML.contains("/console/styles.css"));
         assert!(!INDEX_HTML.contains("src=\"http"));
         assert!(!INDEX_HTML.contains("href=\"http"));
+        assert!(INDEX_HTML.contains("sidebarToggle"));
+        assert!(INDEX_HTML.contains("activityChart"));
         assert!(APP_JS.contains("sessionStorage"));
+        assert!(APP_JS.contains("createElementNS"));
         assert!(!APP_JS.contains("localStorage"));
         assert!(STYLES_CSS.contains("prefers-reduced-motion"));
+        assert!(!STYLES_CSS.contains("gradient"));
+        assert!(!STYLES_CSS.contains("box-shadow"));
     }
 }
