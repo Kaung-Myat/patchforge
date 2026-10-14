@@ -32,7 +32,10 @@ jobs:
           mkdir -p dist/patchforge-linux-amd64
           install -m 0755 cli/target/release/patchforge dist/patchforge-linux-amd64/patchforge
           tar -C dist -czf dist/patchforge-linux-amd64.tar.gz patchforge-linux-amd64
-          sha256sum dist/patchforge-linux-amd64.tar.gz > dist/patchforge-linux-amd64.tar.gz.sha256
+          (
+            cd dist
+            sha256sum patchforge-linux-amd64.tar.gz > patchforge-linux-amd64.tar.gz.sha256
+          )
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2

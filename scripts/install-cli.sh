@@ -39,7 +39,12 @@ curl -fsSL "$RELEASE_URL/$ASSET" -o "$TEMP_DIR/$ASSET"
 curl -fsSL "$RELEASE_URL/$ASSET.sha256" -o "$TEMP_DIR/$ASSET.sha256"
 (
   cd "$TEMP_DIR"
-  sha256sum --check "$ASSET.sha256"
+  EXPECTED_SHA256="$(awk 'NR == 1 { print $1 }' "$ASSET.sha256")"
+  if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "Invalid SHA-256 checksum downloaded for $ASSET." >&2
+    exit 1
+  fi
+  printf '%s  %s\n' "$EXPECTED_SHA256" "$ASSET" | sha256sum --check -
 )
 tar -C "$TEMP_DIR" -xzf "$TEMP_DIR/$ASSET"
 
