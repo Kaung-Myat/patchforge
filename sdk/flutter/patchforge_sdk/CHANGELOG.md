@@ -1,3 +1,10 @@
+## 0.6.0
+
+- Add `PatchForgeConfig.fromEnvironment()` for values injected automatically
+  by the PatchForge CLI release and patch builds.
+- Remove server-specific defaults from the example application so the same
+  source can be initialized against any self-hosted PatchForge server.
+
 ## 0.5.0
 
 - Align the Flutter runtime package with the simplified PatchForge 0.5.0

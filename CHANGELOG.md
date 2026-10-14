@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0
+
+- Make `patchforge release` run the configured Flutter Android release build,
+  inject non-secret SDK settings, and preserve an immutable baseline APK and
+  runtime locally.
+- Make `patchforge patch` build the changed Flutter project, create and publish
+  the delta from the retained latest runtime, verify the signed manifest and
+  artifact, and advance local patch state automatically.
+- Add `PatchForgeConfig.fromEnvironment()` so Flutter applications no longer
+  need to hard-code server, application, channel, or signing-key values.
+- Keep `--old` and `--new` as an advanced artifact workflow and reject stale
+  automatic patch bases instead of creating a broken patch-chain branch.
+
 ## 0.5.0
 
 - Simplify the mobile publisher workflow to the top-level `patchforge init`,

@@ -33,7 +33,7 @@ docker compose -f deploy/dokploy.compose.yaml config --quiet
 
 ## 2. Confirm versions and release notes
 
-For `v0.5.0`, these files must all declare `0.5.0`:
+For `v0.6.0`, these files must all declare `0.6.0`:
 
 - `server/Cargo.toml`
 - `cli/Cargo.toml`
@@ -47,14 +47,14 @@ on `main`.
 ## 3. Create the release tag
 
 ```bash
-git tag -a v0.5.0 -m "PatchForge v0.5.0"
-git push origin v0.5.0
+git tag -a v0.6.0 -m "PatchForge v0.6.0"
+git push origin v0.6.0
 ```
 
 The tag starts the `Publish server image` workflow. Wait until it publishes:
 
 ```text
-ghcr.io/kaung-myat/patchforge-server:0.5.0
+ghcr.io/kaung-myat/patchforge-server:0.6.0
 ```
 
 The separate `Publish CLI` workflow must also attach the CLI archive and its

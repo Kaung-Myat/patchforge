@@ -49,4 +49,45 @@ class PatchForgeConfig {
              channel == 'stable',
          'Unsupported PatchForge release channel.',
        );
+
+  /// Creates the SDK configuration injected automatically by the PatchForge
+  /// CLI during `patchforge release` and `patchforge patch` builds.
+  factory PatchForgeConfig.fromEnvironment({
+    Set<String> revokedKeyIds = const {},
+    String? architecture,
+    PatchForgeBaseArtifactProvider? baseArtifactProvider,
+    Duration bootStabilizationDelay = const Duration(seconds: 5),
+    PatchForgeBootHealthCheck? bootHealthCheck,
+  }) {
+    const baseUrl = String.fromEnvironment('PATCHFORGE_URL');
+    const appId = String.fromEnvironment('PATCHFORGE_APP_ID');
+    const channel = String.fromEnvironment(
+      'PATCHFORGE_CHANNEL',
+      defaultValue: 'stable',
+    );
+    const signingKeyId = String.fromEnvironment('PATCHFORGE_KEY_ID');
+    const signingPublicKey = String.fromEnvironment('PATCHFORGE_PUBLIC_KEY');
+
+    if (baseUrl.isEmpty ||
+        appId.isEmpty ||
+        signingKeyId.isEmpty ||
+        signingPublicKey.isEmpty) {
+      throw StateError(
+        'PatchForge build configuration is missing. Build with '
+        '`patchforge release` or `patchforge patch`.',
+      );
+    }
+
+    return PatchForgeConfig(
+      baseUrl: baseUrl,
+      appId: appId,
+      channel: channel,
+      trustedPublicKeys: {signingKeyId: signingPublicKey},
+      revokedKeyIds: revokedKeyIds,
+      architecture: architecture,
+      baseArtifactProvider: baseArtifactProvider,
+      bootStabilizationDelay: bootStabilizationDelay,
+      bootHealthCheck: bootHealthCheck,
+    );
+  }
 }

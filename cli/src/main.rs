@@ -55,7 +55,7 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Create or select a server release for this project.
+    /// Build and register the baseline release for this Flutter project.
     Release {
         #[command(subcommand)]
         command: Option<ReleaseCommands>,
@@ -66,19 +66,22 @@ enum Commands {
         platform: Option<String>,
         #[arg(long)]
         channel: Option<String>,
+        /// Android ABI to build and retain as the local patch baseline.
+        #[arg(long, default_value = "arm64-v8a")]
+        architecture: String,
         #[arg(long, default_value = "patchforge.yaml")]
         config: PathBuf,
         #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
         token: Option<String>,
     },
-    /// Publish the next OTA patch using the project configuration.
+    /// Build and publish the next OTA patch using the project configuration.
     Patch {
         #[command(subcommand)]
         command: Option<PatchCommands>,
-        /// Base APK or libapp.so. With no subcommand, publishes the next patch.
+        /// Advanced mode: use this APK or libapp.so instead of the cached base.
         #[arg(long)]
         old: Option<PathBuf>,
-        /// Target APK or libapp.so. With no subcommand, publishes the next patch.
+        /// Advanced mode: use this APK or libapp.so instead of building Flutter.
         #[arg(long)]
         new: Option<PathBuf>,
         #[arg(long, default_value = "arm64-v8a")]
@@ -394,6 +397,7 @@ struct PublishOptions<'a> {
     artifact_prefix: &'a str,
     patch_number: Option<i32>,
     output: Option<&'a Path>,
+    require_latest_base: bool,
 }
 
 struct InitOptions<'a> {
@@ -721,6 +725,321 @@ fn flutter_project_version(path: &Path) -> Result<String> {
     Ok(version.to_string())
 }
 
+fn project_root(config_path: &Path) -> &Path {
+    config_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn android_build_target(architecture: &str) -> Result<(&'static str, &'static str)> {
+    match architecture {
+        "arm64-v8a" => Ok(("android-arm64", "app-arm64-v8a-release.apk")),
+        "armeabi-v7a" => Ok(("android-arm", "app-armeabi-v7a-release.apk")),
+        "x86_64" => Ok(("android-x64", "app-x86_64-release.apk")),
+        _ => bail!(
+            "Unsupported architecture '{architecture}'. Expected arm64-v8a, armeabi-v7a, or x86_64"
+        ),
+    }
+}
+
+fn flutter_build_defines(config: &ProjectConfig) -> Vec<String> {
+    vec![
+        format!("PATCHFORGE_URL={}", config.server_url),
+        format!("PATCHFORGE_APP_ID={}", config.app_id),
+        format!("PATCHFORGE_CHANNEL={}", config.channel),
+        format!("PATCHFORGE_KEY_ID={}", config.signing_key_id),
+        format!("PATCHFORGE_PUBLIC_KEY={}", config.signing_public_key),
+    ]
+}
+
+fn build_flutter_apk(
+    config_path: &Path,
+    config: &ProjectConfig,
+    architecture: &str,
+) -> Result<PathBuf> {
+    if config.platform != "android" {
+        bail!("Automatic builds currently support Android projects only");
+    }
+    let root = project_root(config_path);
+    let pubspec = root.join("pubspec.yaml");
+    if !pubspec.is_file() {
+        bail!(
+            "Flutter pubspec not found at {}. Run PatchForge from the Flutter project root",
+            pubspec.display()
+        );
+    }
+    let (target_platform, apk_name) = android_build_target(architecture)?;
+    println!("Building Flutter release for {architecture}...");
+    let mut command = Command::new("flutter");
+    command.current_dir(root).args([
+        "build",
+        "apk",
+        "--release",
+        "--target-platform",
+        target_platform,
+        "--split-per-abi",
+    ]);
+    for define in flutter_build_defines(config) {
+        command.arg(format!("--dart-define={define}"));
+    }
+    let status = command
+        .status()
+        .context("Failed to run Flutter. Is the flutter command available in PATH?")?;
+    if !status.success() {
+        bail!("Flutter release build failed");
+    }
+    let apk = root.join("build/app/outputs/flutter-apk").join(apk_name);
+    if !apk.is_file() {
+        bail!(
+            "Flutter completed but the expected APK was not found at {}",
+            apk.display()
+        );
+    }
+    println!("Built APK: {}", apk.display());
+    Ok(apk)
+}
+
+fn release_state_dir(
+    config_path: &Path,
+    config: &ProjectConfig,
+    architecture: &str,
+) -> Result<PathBuf> {
+    let release_id = config
+        .release_id
+        .as_deref()
+        .context("No active release. Run `patchforge release` first")?;
+    Ok(project_root(config_path)
+        .join(".patchforge/releases")
+        .join(release_id)
+        .join(architecture))
+}
+
+fn cached_runtime_path(
+    config_path: &Path,
+    config: &ProjectConfig,
+    architecture: &str,
+) -> Result<PathBuf> {
+    Ok(release_state_dir(config_path, config, architecture)?.join("current-libapp.so"))
+}
+
+fn release_runtime_path(
+    config_path: &Path,
+    config: &ProjectConfig,
+    architecture: &str,
+) -> Result<PathBuf> {
+    Ok(release_state_dir(config_path, config, architecture)?.join("release-libapp.so"))
+}
+
+fn release_apk_path(
+    config_path: &Path,
+    config: &ProjectConfig,
+    architecture: &str,
+) -> Result<PathBuf> {
+    Ok(release_state_dir(config_path, config, architecture)?.join("release.apk"))
+}
+
+fn extract_runtime_to_cache(
+    apk: &Path,
+    architecture: &str,
+    destination: &Path,
+    replace: bool,
+) -> Result<()> {
+    let parent = destination
+        .parent()
+        .context("PatchForge runtime cache path has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = tempfile::NamedTempFile::new_in(parent)?;
+    extract_libapp(apk, architecture, temporary.path())?;
+
+    if destination.is_file() && !replace {
+        let existing_hash = sha256_file(destination)?;
+        let built_hash = sha256_file(temporary.path())?;
+        if existing_hash != built_hash {
+            bail!(
+                "This release already has a different local baseline. Use `patchforge patch` for code changes or create a new app version"
+            );
+        }
+        println!("Local release baseline is already current.");
+        return Ok(());
+    }
+
+    temporary
+        .persist(destination)
+        .map_err(|error| error.error)
+        .with_context(|| format!("Failed to save runtime cache at {}", destination.display()))?;
+    println!("Saved PatchForge runtime state: {}", destination.display());
+    Ok(())
+}
+
+fn build_release_baseline(
+    config_path: &Path,
+    config: &ProjectConfig,
+    architecture: &str,
+) -> Result<()> {
+    let apk = build_flutter_apk(config_path, config, architecture)?;
+    let token = publisher_token(config, None)?;
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let release_id = config
+        .release_id
+        .as_deref()
+        .context("No active release. Run `patchforge release` first")?;
+    let temporary = TempDir::new()?;
+    let built_runtime = temporary.path().join("release-libapp.so");
+    extract_libapp(&apk, architecture, &built_runtime)?;
+    let built_hash = sha256_file(&built_runtime)?;
+    let built_size = i64::try_from(fs::metadata(&built_runtime)?.len())?;
+
+    let artifacts_url = api_url(
+        &config.server_url,
+        &format!("api/v1/releases/{release_id}/artifacts"),
+    );
+    let artifacts: Vec<ReleaseArtifact> = checked_response(
+        client.get(&artifacts_url).bearer_auth(&token).send()?,
+        "Reading release baseline artifacts",
+    )?
+    .json()?;
+    let patches_url = api_url(
+        &config.server_url,
+        &format!("api/v1/releases/{release_id}/patches"),
+    );
+    let patches: Vec<PatchRecord> = checked_response(
+        client.get(&patches_url).bearer_auth(&token).send()?,
+        "Reading release patches",
+    )?
+    .json()?;
+    let architecture_patches: Vec<&PatchRecord> = patches
+        .iter()
+        .filter(|patch| patch.architecture.as_deref() == Some(architecture))
+        .collect();
+
+    match artifacts
+        .iter()
+        .find(|artifact| artifact.architecture == architecture)
+    {
+        Some(baseline) => {
+            if baseline.sha256 != built_hash || baseline.file_size != built_size {
+                bail!(
+                    "The Flutter build does not match the registered {architecture} release baseline. Check out the store-release source before rerunning `patchforge release`"
+                );
+            }
+        }
+        None => {
+            if !architecture_patches.is_empty() {
+                bail!("The release has {architecture} patches but no registered baseline artifact");
+            }
+            let request = CreateReleaseArtifactRequest {
+                architecture,
+                sha256: &built_hash,
+                file_size: built_size,
+            };
+            let created: ReleaseArtifact = checked_response(
+                client
+                    .post(&artifacts_url)
+                    .bearer_auth(&token)
+                    .json(&request)
+                    .send()?,
+                "Registering release baseline artifact",
+            )?
+            .json()?;
+            println!(
+                "Registered {} release baseline: {}",
+                created.architecture, created.sha256
+            );
+        }
+    }
+
+    let release_runtime = release_runtime_path(config_path, config, architecture)?;
+    let current_runtime = cached_runtime_path(config_path, config, architecture)?;
+    let release_apk = release_apk_path(config_path, config, architecture)?;
+    extract_runtime_to_cache(&apk, architecture, &release_runtime, false)?;
+    if architecture_patches.is_empty() && !current_runtime.exists() {
+        fs::copy(&release_runtime, &current_runtime).with_context(|| {
+            format!(
+                "Failed to initialize patch state at {}",
+                current_runtime.display()
+            )
+        })?;
+    } else if architecture_patches.is_empty() {
+        if sha256_file(&current_runtime)? != built_hash {
+            bail!("Local runtime state differs from the unpatched release baseline");
+        }
+    } else if let Some(latest) = architecture_patches
+        .iter()
+        .max_by_key(|patch| patch.patch_number)
+    {
+        let current_hash = sha256_file(&current_runtime).with_context(|| {
+            format!(
+                "Local current runtime is missing. Restore the latest patched source and run advanced --old/--new mode once: {}",
+                current_runtime.display()
+            )
+        })?;
+        if latest.target_sha256.as_deref() != Some(current_hash.as_str()) {
+            bail!(
+                "Local runtime state does not match the latest server patch {}",
+                latest.patch_number
+            );
+        }
+    }
+    if !release_apk.exists() {
+        fs::copy(&apk, &release_apk).with_context(|| {
+            format!(
+                "Failed to preserve release APK at {}",
+                release_apk.display()
+            )
+        })?;
+    }
+    println!();
+    println!("Release baseline is ready.");
+    println!("Install or distribute: {}", release_apk.display());
+    println!("Next: edit Dart code, then run `patchforge patch`");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_and_publish_project_patch(
+    config_path: &Path,
+    token_override: Option<String>,
+    architecture: &str,
+    rollout_percentage: i32,
+    manifest_version: i32,
+    patch_number: Option<i32>,
+    output: Option<&Path>,
+) -> Result<()> {
+    let config = load_project_config(config_path)?;
+    let cached = cached_runtime_path(config_path, &config, architecture)?;
+    if !cached.is_file() {
+        bail!(
+            "Local release baseline is missing at {}. Run `patchforge release` first",
+            cached.display()
+        );
+    }
+
+    let target_apk = build_flutter_apk(config_path, &config, architecture)?;
+    let temporary = TempDir::new()?;
+    let target_runtime = temporary.path().join("target-libapp.so");
+    extract_libapp(&target_apk, architecture, &target_runtime)?;
+    if sha256_file(&cached)? == sha256_file(&target_runtime)? {
+        bail!("No Dart AOT changes were detected; there is no patch to publish");
+    }
+
+    publish_project_patch(
+        config_path,
+        token_override,
+        &cached,
+        &target_apk,
+        architecture,
+        rollout_percentage,
+        manifest_version,
+        patch_number,
+        output,
+        true,
+    )?;
+    extract_runtime_to_cache(&target_apk, architecture, &cached, true)?;
+    println!("Local patch state advanced to the published target.");
+    Ok(())
+}
+
 fn publisher_token(config: &ProjectConfig, override_token: Option<String>) -> Result<String> {
     let token = match override_token {
         Some(token) => token,
@@ -870,7 +1189,7 @@ fn create_or_select_release(
     version: &str,
     platform_override: Option<&str>,
     channel_override: Option<&str>,
-) -> Result<()> {
+) -> Result<ProjectConfig> {
     if version.trim().is_empty() {
         bail!("Release version cannot be empty");
     }
@@ -927,8 +1246,7 @@ fn create_or_select_release(
     println!("Channel: {}", config.channel);
     println!("Configuration updated: {}", config_path.display());
     println!();
-    println!("Next: patchforge patch --old <base.apk> --new <target.apk>");
-    Ok(())
+    Ok(config)
 }
 
 fn create_local_patch(old: &Path, new: &Path, output: &Path, architecture: &str) -> Result<()> {
@@ -964,6 +1282,7 @@ fn publish_project_patch(
     manifest_version: i32,
     patch_number: Option<i32>,
     output: Option<&Path>,
+    require_latest_base: bool,
 ) -> Result<()> {
     let project = load_project_config(config_path)?;
     let token = publisher_token(&project, token_override)?;
@@ -993,6 +1312,7 @@ fn publish_project_patch(
         artifact_prefix: "patches",
         patch_number,
         output,
+        require_latest_base,
     })
 }
 
@@ -1322,6 +1642,12 @@ fn publish(options: PublishOptions<'_>) -> Result<()> {
         .map(|patch| patch.patch_number)
         .max()
         .unwrap_or(0);
+    if options.require_latest_base && base_patch_number != latest_number {
+        bail!(
+            "The local PatchForge runtime is at patch {base_patch_number}, but the server's latest {} patch is {latest_number}. Restore the latest project state or use advanced --old/--new mode deliberately",
+            options.architecture
+        );
+    }
     let patch_number = match options.patch_number {
         Some(number) if number > base_patch_number => number,
         Some(number) => {
@@ -1559,6 +1885,7 @@ fn main() -> Result<()> {
             version,
             platform,
             channel,
+            architecture,
             config,
             token,
         } => match command {
@@ -1568,22 +1895,7 @@ fn main() -> Result<()> {
                 channel,
                 config,
                 token,
-            }) => create_or_select_release(
-                &config,
-                token,
-                &version,
-                platform.as_deref(),
-                channel.as_deref(),
-            )?,
-            None => {
-                let version = match version {
-                    Some(version) => version,
-                    None => {
-                        let detected = flutter_project_version(Path::new("pubspec.yaml"))?;
-                        println!("Detected Flutter version {detected} from pubspec.yaml.");
-                        detected
-                    }
-                };
+            }) => {
                 create_or_select_release(
                     &config,
                     token,
@@ -1591,6 +1903,25 @@ fn main() -> Result<()> {
                     platform.as_deref(),
                     channel.as_deref(),
                 )?;
+            }
+            None => {
+                let version = match version {
+                    Some(version) => version,
+                    None => {
+                        let detected =
+                            flutter_project_version(&project_root(&config).join("pubspec.yaml"))?;
+                        println!("Detected Flutter version {detected} from pubspec.yaml.");
+                        detected
+                    }
+                };
+                let project = create_or_select_release(
+                    &config,
+                    token,
+                    &version,
+                    platform.as_deref(),
+                    channel.as_deref(),
+                )?;
+                build_release_baseline(&config, &project, &architecture)?;
             }
         },
         Commands::Patch {
@@ -1631,15 +1962,19 @@ fn main() -> Result<()> {
                 manifest_version,
                 patch_number,
                 output.as_deref(),
+                false,
             )?,
-            None => {
-                let old = old.context(
-                    "Missing --old. Usage: patchforge patch --old <base.apk> --new <target.apk>",
-                )?;
-                let new = new.context(
-                    "Missing --new. Usage: patchforge patch --old <base.apk> --new <target.apk>",
-                )?;
-                publish_project_patch(
+            None => match (old, new) {
+                (None, None) => build_and_publish_project_patch(
+                    &config,
+                    token,
+                    &architecture,
+                    rollout_percentage,
+                    manifest_version,
+                    patch_number,
+                    output.as_deref(),
+                )?,
+                (Some(old), Some(new)) => publish_project_patch(
                     &config,
                     token,
                     &old,
@@ -1649,8 +1984,10 @@ fn main() -> Result<()> {
                     manifest_version,
                     patch_number,
                     output.as_deref(),
-                )?;
-            }
+                    false,
+                )?,
+                _ => bail!("Use both --old and --new, or omit both for an automatic Flutter build"),
+            },
         },
         Commands::TokenHash { token } => {
             println!("{}", hex::encode(Sha256::digest(token.as_bytes())));
@@ -1705,6 +2042,7 @@ fn main() -> Result<()> {
             artifact_prefix: &artifact_prefix,
             patch_number,
             output: output.as_deref(),
+            require_latest_base: false,
         })?,
     }
     Ok(())
@@ -1716,9 +2054,11 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Cli, Commands, PatchCommands, ProjectConfig, ReleaseCommands, api_url, artifact_path,
-        flutter_project_version, load_project_config, normalize_server_url, save_project_config,
-        sha256_reader, validate_remote_storage_dir, validate_ssh_target,
+        Cli, Commands, PatchCommands, ProjectConfig, ReleaseCommands, android_build_target,
+        api_url, artifact_path, cached_runtime_path, flutter_build_defines,
+        flutter_project_version, load_project_config, normalize_server_url, release_apk_path,
+        release_runtime_path, save_project_config, sha256_reader, validate_remote_storage_dir,
+        validate_ssh_target,
     };
     use tempfile::TempDir;
 
@@ -1863,6 +2203,59 @@ mod tests {
                 ..
             }
         ));
+
+        let automatic_patch = Cli::try_parse_from(["patchforge", "patch"]).unwrap();
+        assert!(matches!(
+            automatic_patch.command,
+            Commands::Patch {
+                command: None,
+                old: None,
+                new: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn prepares_automatic_flutter_build_inputs_and_cache_path() {
+        let temp = TempDir::new().unwrap();
+        let config_path = temp.path().join("patchforge.yaml");
+        let config = ProjectConfig {
+            schema_version: 1,
+            server_url: "https://updates.example.com".to_string(),
+            app_id: "app-id".to_string(),
+            app_name: "Example".to_string(),
+            platform: "android".to_string(),
+            channel: "stable".to_string(),
+            signing_key_id: "main-2026".to_string(),
+            signing_public_key: "public-key".to_string(),
+            release_id: Some("release-id".to_string()),
+            release_version: Some("1.0.0".to_string()),
+        };
+
+        assert_eq!(
+            android_build_target("arm64-v8a").unwrap(),
+            ("android-arm64", "app-arm64-v8a-release.apk")
+        );
+        assert!(android_build_target("unsupported").is_err());
+        let defines = flutter_build_defines(&config);
+        assert!(defines.contains(&"PATCHFORGE_APP_ID=app-id".to_string()));
+        assert!(defines.contains(&"PATCHFORGE_CHANNEL=stable".to_string()));
+        assert_eq!(
+            cached_runtime_path(&config_path, &config, "arm64-v8a").unwrap(),
+            temp.path()
+                .join(".patchforge/releases/release-id/arm64-v8a/current-libapp.so")
+        );
+        assert_eq!(
+            release_runtime_path(&config_path, &config, "arm64-v8a").unwrap(),
+            temp.path()
+                .join(".patchforge/releases/release-id/arm64-v8a/release-libapp.so")
+        );
+        assert_eq!(
+            release_apk_path(&config_path, &config, "arm64-v8a").unwrap(),
+            temp.path()
+                .join(".patchforge/releases/release-id/arm64-v8a/release.apk")
+        );
     }
 
     #[test]
@@ -1871,9 +2264,13 @@ mod tests {
         assert!(help.contains("init"));
         assert!(help.contains("release"));
         assert!(help.contains("patch"));
-        assert!(!help.contains("token-hash"));
-        assert!(!help.contains("publish"));
-        assert!(!help.contains("verify"));
+        for hidden in ["token-hash", "publish", "verify"] {
+            assert!(
+                !help
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(&format!("{hidden} ")))
+            );
+        }
     }
 
     #[test]

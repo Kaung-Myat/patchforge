@@ -42,6 +42,8 @@ Flutter/flutter_export_environment.sh
 **/GeneratedPluginRegistrant.*
 
 # Generated release and delta artifacts
+.patchforge/
+sdk/flutter/patchforge_example/patchforge.yaml
 *.apk
 *.aab
 *.ipa

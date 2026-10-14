@@ -3,27 +3,7 @@ import 'package:patchforge_sdk/patchforge_sdk.dart';
 
 const demoLabel = String.fromEnvironment(
   'PATCHFORGE_DEMO_LABEL',
-  defaultValue: 'BASELINE — before OTA',
-);
-
-const patchForgeAppId = String.fromEnvironment(
-  'PATCHFORGE_APP_ID',
-  defaultValue: '419c2112-44ce-4158-812a-e9485b556d56',
-);
-
-const patchForgeServer = String.fromEnvironment(
-  'PATCHFORGE_URL',
-  defaultValue: 'https://104-207-92-53.sslip.io',
-);
-
-const patchForgeSigningKeyId = String.fromEnvironment(
-  'PATCHFORGE_KEY_ID',
-  defaultValue: 'main-20261012',
-);
-
-const patchForgeSigningPublicKey = String.fromEnvironment(
-  'PATCHFORGE_PUBLIC_KEY',
-  defaultValue: 'x5oNKvEXjPVgC4SF5KhsLUKFZ0gQAPw9xxCvLqvdbWk=',
+  defaultValue: 'PATCHFORGE AUTO PATCH — v0.6',
 );
 
 void main() {
@@ -60,15 +40,7 @@ class _HomePageState extends State<HomePage> {
     super.initState();
 
     patchForge = PatchForge(
-      config: const PatchForgeConfig(
-        baseUrl: patchForgeServer,
-
-        appId: patchForgeAppId,
-
-        trustedPublicKeys: {patchForgeSigningKeyId: patchForgeSigningPublicKey},
-
-        revokedKeyIds: {},
-
+      config: PatchForgeConfig.fromEnvironment(
         bootStabilizationDelay: Duration(seconds: 5),
       ),
     );

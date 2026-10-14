@@ -45,13 +45,7 @@ throwing health check rolls the pending patch back.
 
 ```dart
 final patchForge = PatchForge(
-  config: const PatchForgeConfig(
-    baseUrl: 'https://updates.example.com',
-    appId: 'your-app-id',
-    trustedPublicKeys: {
-      'main-2026': 'base64-ed25519-public-key',
-    },
-  ),
+  config: PatchForgeConfig.fromEnvironment(),
 );
 
 final result = await patchForge.update();
@@ -60,6 +54,11 @@ if (result.status == PatchUpdateStatus.staged) {
   print('Reconstructed binary: ${result.file?.path}');
 }
 ```
+
+`patchforge release` and `patchforge patch` inject the server URL, app ID,
+channel, signing key ID, and public key at compile time. They do not place the
+publisher token in the application. Construct `PatchForgeConfig` directly only
+for custom build systems or embedders.
 
 On Android, the plugin finds an extracted `libapp.so` in the native library
 directory or extracts it from the installed base/split APK. Other embedders can

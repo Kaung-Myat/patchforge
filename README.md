@@ -120,39 +120,45 @@ unset PATCHFORGE_TOKEN
 the named app, discovers the active Ed25519 public key, and writes a shareable
 `patchforge.yaml` in the project. The raw publisher token is stored separately
 under `~/.config/patchforge/credentials` with mode `0600`; it is never written
-to the project configuration.
+to the project configuration. Configure the Flutter SDK once with values that
+the CLI injects automatically during release builds:
 
-Copy the printed `baseUrl`, `appId`, `trustedPublicKeys`, and `channel` values
-into `PatchForgeConfig` in the Flutter app. The normal publisher workflow then
-uses three top-level commands: `init`, `release`, and `patch`.
+```dart
+final patchForge = PatchForge(
+  config: PatchForgeConfig.fromEnvironment(),
+);
+```
 
-Create or select the release matching the version installed on users' devices:
+The normal publisher workflow then uses three top-level commands: `init`,
+`release`, and `patch`. Build and register the store release baseline:
 
 ```bash
 patchforge release
 ```
 
-`patchforge release` reads the version from the Flutter project's
-`pubspec.yaml` and removes the `+build-number` suffix so it matches
-`PackageInfo.version` on the device. Override detection when needed:
+`patchforge release` reads the version from the Flutter project's `pubspec.yaml`,
+removes the `+build-number` suffix, runs the Flutter Android release build with
+the server configuration injected, and preserves the baseline APK and
+`libapp.so` under `.patchforge/`. Install or distribute the APK path printed by
+the command. Override version detection when needed:
 
 ```bash
 patchforge release --version 1.0.0
 ```
 
-Publish the next patch using the project configuration and two artifact flags:
+After changing Dart code, build and publish the next patch:
 
 ```bash
-patchforge patch \
-  --old build/baseline.apk \
-  --new build/patched.apk
+patchforge patch
 ```
 
-The patch command selects the correct parent patch, creates and reconstructs
-the delta, uploads it over authenticated HTTPS, creates the signed record, and
-verifies both the device manifest and public artifact download. The original
-`release create`, `patch create`, `patch release`, and low-level `publish`
-commands remain available for existing automation and advanced use cases.
+The patch command runs the matching Flutter build, uses the locally retained
+current runtime as its base, selects the latest server parent, creates and
+reconstructs the delta, uploads it over authenticated HTTPS, creates the signed
+record, verifies the device manifest and public artifact download, then advances
+the local patch state. Use both `--old` and `--new` only for advanced manual
+artifact workflows. The original `release create`, `patch create`, `patch
+release`, and low-level `publish` commands remain available for compatibility.
 
 To create and verify a local delta without publishing it:
 

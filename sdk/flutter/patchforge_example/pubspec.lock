@@ -294,7 +294,7 @@ packages:
       path: "../patchforge_sdk"
       relative: true
     source: path
-    version: "0.0.1"
+    version: "0.6.0"
   path:
     dependency: transitive
     description:

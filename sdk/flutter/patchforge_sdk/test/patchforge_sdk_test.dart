@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:patchforge_sdk/src/config.dart';
 import 'package:patchforge_sdk/src/client.dart';
 import 'package:patchforge_sdk/src/delta/bsdiff_patcher.dart';
 import 'package:patchforge_sdk/src/models/patch_manifest.dart';
@@ -9,6 +10,10 @@ import 'package:patchforge_sdk/src/platform/base_artifact_locator.dart';
 import 'package:patchforge_sdk/src/security/signature_verifier.dart';
 
 void main() {
+  test('environment configuration fails clearly without CLI build values', () {
+    expect(PatchForgeConfig.fromEnvironment, throwsStateError);
+  });
+
   group('ELF architecture detection', () {
     List<int> elfHeader(int machine) {
       final header = List<int>.filled(20, 0);
