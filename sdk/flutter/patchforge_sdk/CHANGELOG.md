@@ -1,3 +1,9 @@
+## 0.5.0
+
+- Align the Flutter runtime package with the simplified PatchForge 0.5.0
+  publisher workflow. Runtime and manifest behavior remain compatible with
+  0.4.1.
+
 ## 0.4.1
 
 - Keep the Flutter runtime package version aligned with the PatchForge 0.4.1

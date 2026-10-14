@@ -28,7 +28,7 @@ if [[ "$VERSION" == "latest" ]]; then
 elif [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
   RELEASE_URL="https://github.com/$REPOSITORY/releases/download/$VERSION"
 else
-  echo "PATCHFORGE_CLI_VERSION must be 'latest' or a semantic tag such as v0.4.1." >&2
+  echo "PATCHFORGE_CLI_VERSION must be 'latest' or a semantic tag such as v0.5.0." >&2
   exit 1
 fi
 

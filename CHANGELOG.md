@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Simplify the mobile publisher workflow to the top-level `patchforge init`,
   `patchforge release`, and `patchforge patch` commands.
