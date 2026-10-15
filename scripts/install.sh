@@ -147,9 +147,10 @@ echo "URL: https://$PATCHFORGE_DOMAIN"
 echo "Signing key ID: $PATCHFORGE_KEY_ID"
 echo "SDK public key: $PUBLIC_KEY"
 echo "Publisher token file: $INSTALL_DIR/secrets/publisher-token"
+echo "Retrieve publisher token: sudo patchforge publisher-token"
 echo "Management: sudo patchforge status"
 if [[ "$FIRST_INSTALL" == "true" ]]; then
   echo
-  echo "Copy the publisher token to a secure password manager or publisher workstation."
+  echo "Run the retrieval command once and copy the token to a secure password manager or publisher workstation."
   echo "The raw token will not be shown by this installer."
 fi

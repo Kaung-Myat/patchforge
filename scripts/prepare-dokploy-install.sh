@@ -104,7 +104,8 @@ echo "Next: create a Dokploy Compose service from deploy/dokploy.compose.yaml"
 echo "and paste the contents of $OUTPUT_FILE into its Environment tab."
 if command -v patchforge-dokploy >/dev/null 2>&1; then
   echo "After deployment, verify it with: sudo patchforge-dokploy doctor"
+  echo "Retrieve publisher token with: sudo patchforge-dokploy publisher-token"
 fi
 if [[ "$FIRST_INSTALL" == "true" ]]; then
-  echo "Copy the publisher token to a secure publisher workstation after deployment."
+  echo "Run the retrieval command once and copy the token to a secure publisher workstation."
 fi

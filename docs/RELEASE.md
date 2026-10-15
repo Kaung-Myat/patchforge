@@ -1,7 +1,8 @@
 # Release PatchForge
 
-PatchForge uses matching semantic versions for the server, CLI, Flutter SDK,
-and GHCR server image. Complete every check below before publishing a tag.
+PatchForge tags publish matching server and CLI versions. The Flutter SDK is
+versioned independently when its runtime code changes. Complete every check
+below before publishing a tag.
 
 ## 1. Verify locally
 
@@ -33,12 +34,15 @@ docker compose -f deploy/dokploy.compose.yaml config --quiet
 
 ## 2. Confirm versions and release notes
 
-For `v0.6.0`, these files must all declare `0.6.0`:
+For a tag such as `v0.6.2`, these files must declare `0.6.2`:
 
 - `server/Cargo.toml`
 - `cli/Cargo.toml`
-- `sdk/flutter/patchforge_sdk/pubspec.yaml`
 - `CHANGELOG.md`
+
+Only when the Flutter runtime package changes, bump and publish these too:
+
+- `sdk/flutter/patchforge_sdk/pubspec.yaml`
 - `sdk/flutter/patchforge_sdk/CHANGELOG.md`
 
 Commit the release changes and wait for the GitHub Actions CI workflow to pass
@@ -47,14 +51,14 @@ on `main`.
 ## 3. Create the release tag
 
 ```bash
-git tag -a v0.6.0 -m "PatchForge v0.6.0"
-git push origin v0.6.0
+git tag -a v0.6.2 -m "PatchForge v0.6.2"
+git push origin v0.6.2
 ```
 
 The tag starts the `Publish server image` workflow. Wait until it publishes:
 
 ```text
-ghcr.io/kaung-myat/patchforge-server:0.6.0
+ghcr.io/kaung-myat/patchforge-server:0.6.2
 ```
 
 The separate `Publish CLI` workflow must also attach the CLI archive and its
@@ -66,6 +70,17 @@ advertise the CLI installer until both workflows succeed.
 Change `PATCHFORGE_SERVER_IMAGE` in the Dokploy Environment tab to the new
 version, save, and deploy. Do not use the old standalone `patchforge update`
 command for a Dokploy-managed installation.
+
+Update the host-side Dokploy helper from the matching source tag so new admin
+commands are available:
+
+```bash
+git -C /srv/patchforge fetch --tags
+git -C /srv/patchforge checkout v0.6.2
+sudo install -m 0755 \
+  /srv/patchforge/scripts/patchforge-dokploy.sh \
+  /usr/local/bin/patchforge-dokploy
+```
 
 Verify:
 

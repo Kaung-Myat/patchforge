@@ -183,9 +183,11 @@
     elements.appIdValue.textContent = app?.id || "—";
     elements.keyIdValue.textContent = state.system.signing.key_id;
     elements.publicKeyValue.textContent = state.system.signing.public_key_base64;
-    elements.initCommand.textContent = app
+    const login = `patchforge login --url ${location.origin}`;
+    const init = app
       ? `patchforge init --url ${location.origin} --app-id ${app.id}`
       : `patchforge init --url ${location.origin}`;
+    elements.initCommand.textContent = `${login}\n${init}`;
   }
 
   function renderReleases() {

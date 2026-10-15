@@ -1,8 +1,28 @@
 # PatchForge
 
-PatchForge is a self-hosted Flutter OTA proof of concept. It generates signed
-`bsdiff` deltas for Android `libapp.so`, verifies reconstructed artifacts, and
+PatchForge is a self-hosted Flutter Android OTA proof of concept. It generates
+signed `bsdiff` deltas for `libapp.so`, verifies reconstructed artifacts, and
 serves update manifests to the Flutter SDK.
+
+> **Current scope:** use PatchForge with controlled Android QA builds that you
+> distribute as APKs. It is not yet recommended for production Google Play or
+> Apple App Store applications. iOS is not supported. Native-code, asset,
+> plugin, permission, and Flutter-engine changes require a new APK baseline;
+> the patch workflow is intended for compatible Dart AOT changes.
+
+## How the developer workflow is divided
+
+| Role | One-time work | Regular work |
+| --- | --- | --- |
+| Server administrator | Install PatchForge, configure HTTPS, back up secrets/data, give trusted publishers the server URL and publisher token | Monitor, back up, update, and rotate credentials |
+| Flutter developer | Install the SDK and CLI, run `patchforge login`, then `patchforge init` | Run `patchforge release` for each new APK baseline and `patchforge patch` for compatible Dart changes |
+| QA tester | Install the exact APK produced by `patchforge release` | Restart the app after a patch is staged and verify the changed behavior |
+
+The App ID, signing key ID, and signing public key are safe to include in the
+mobile build and `patchforge.yaml`. The **publisher token is a secret** with
+permission to create apps, releases, and patches. Never commit it, embed it in
+an APK, or send it to QA devices. The signing private key and database password
+must remain on the VPS.
 
 ## Install on a dedicated VPS
 
@@ -32,13 +52,16 @@ sudo patchforge doctor
 sudo patchforge logs server
 sudo patchforge backup
 sudo patchforge update
+sudo patchforge publisher-token
 ```
 
 Runtime files live under `/opt/patchforge`. The raw publisher credential is
 stored with mode `0600` at
 `/opt/patchforge/secrets/publisher-token`; the API container receives only its
-SHA-256 hash. Copy that token once to the secured publisher workstation. The
-private signing key is mounted only into the API container as a Compose secret.
+SHA-256 hash. Run `sudo patchforge publisher-token` on the VPS to retrieve it
+when onboarding a trusted publisher. Copy it once into a password manager, use
+it for `patchforge login`, and do not paste it into a project file. The private
+signing key is mounted only into the API container as a Compose secret.
 
 Open `https://your-domain/console/` after installation to use the built-in web
 console. Connect with the raw publisher token to see server status, create apps
@@ -70,6 +93,7 @@ Environment tab, and deploy. Verify the installation with:
 
 ```bash
 sudo patchforge-dokploy doctor
+sudo patchforge-dokploy publisher-token
 ```
 
 The same built-in console is then available at
@@ -85,7 +109,7 @@ For production, select a release tag in Dokploy and pin
 `PATCHFORGE_SERVER_IMAGE` to the matching image version instead of `latest`.
 See [docs/RELEASE.md](docs/RELEASE.md) for the release checklist.
 
-## Initialize a Flutter project
+## Set up a Flutter developer workstation
 
 Release tags publish a Linux amd64 CLI archive and checksum. Install the latest
 CLI as the current user (or run the reviewed script with `sudo` to install under
@@ -100,28 +124,51 @@ bash install-cli.sh
 From a source checkout, use `cargo install --path cli --locked` instead.
 Install `bsdiff` on the publisher workstation before creating patches.
 
-The server administrator gives the mobile developer the public server URL and
-publisher token. Initialize the Flutter project without placing the token in
-shell history:
+Add the public Flutter package from the Flutter project root:
 
 ```bash
-read -rsp "PatchForge publisher token: " PATCHFORGE_TOKEN
-echo
-export PATCHFORGE_TOKEN
+flutter pub add patchforge_sdk
+```
 
+The server administrator gives a trusted Flutter publisher the HTTPS server URL
+and the raw publisher token. Save the token once with a hidden prompt; do not
+put it on the command line or in shell history:
+
+```bash
+patchforge login --url https://updates.example.com
+```
+
+`patchforge login` verifies the server and credential, then saves a server-wide
+credential under `~/.config/patchforge/credentials` with mode `0600`. It never
+prints the raw token or writes it into the project. For non-interactive CI,
+provide the token through the secret environment variable `PATCHFORGE_TOKEN`.
+
+Create an application in the web console, copy its App ID, and initialize the
+Flutter project:
+
+```bash
+patchforge init \
+  --url https://updates.example.com \
+  --app-id 00000000-0000-0000-0000-000000000000
+```
+
+If no saved server credential exists, `patchforge init` asks for the token with
+the same hidden prompt, so `--token` is optional. To create or reuse an app by
+name instead of selecting a console-created App ID, use:
+
+```bash
 patchforge init \
   --url https://updates.example.com \
   --app-name com.example.my_app
-
-unset PATCHFORGE_TOKEN
 ```
 
 `patchforge init` verifies the public SDK dependency, server health, and
 authentication; creates or reuses the named app; discovers the active Ed25519
 public key; writes a shareable `patchforge.yaml`; and adds `.patchforge/` to
-the project's `.gitignore`. The raw publisher token is stored separately under
-`~/.config/patchforge/credentials` with mode `0600`; it is never written to the
-project configuration.
+the project's `.gitignore`. It also creates an app-specific protected
+credential for `doctor`, `release`, and `patch`. The generated
+`patchforge.yaml` contains only non-secret server, app, channel, and public
+signing values and should be committed with the application source.
 
 Run the project doctor before the first release or whenever a workstation or
 server configuration changes:
@@ -175,7 +222,7 @@ then confirms the patched boot automatically after the first frame and its
 stabilization period.
 
 The normal publisher workflow then uses three top-level commands: `init`,
-`release`, and `patch`. Build and register the store release baseline:
+`release`, and `patch`. Build and register the QA APK baseline:
 
 ```bash
 patchforge release
@@ -185,7 +232,9 @@ patchforge release
 removes the `+build-number` suffix, runs the Flutter Android release build with
 the server configuration injected, and preserves the baseline APK and
 `libapp.so` under `.patchforge/`. Install or distribute the APK path printed by
-the command. Override version detection when needed:
+the command to QA through ADB, Firebase App Distribution, or another private
+APK channel. Every tester who should receive later patches must start from this
+exact baseline APK. Override version detection when needed:
 
 ```bash
 patchforge release --version 1.0.0
@@ -204,6 +253,23 @@ record, verifies the device manifest and public artifact download, then advances
 the local patch state. Use both `--old` and `--new` only for advanced manual
 artifact workflows. The original `release create`, `patch create`, `patch
 release`, and low-level `publish` commands remain available for compatibility.
+
+Use `patchforge patch` only when the change is compatible with the current
+baseline. Run `patchforge release` and redistribute a new APK when changing
+Flutter/Dart SDK versions, native Android code, plugins, permissions, assets,
+fonts, the app manifest, or build configuration. When uncertain, create a new
+baseline APK instead of shipping an OTA patch.
+
+### End-to-end QA checklist
+
+1. Run `patchforge doctor`; all required checks must pass.
+2. Run `patchforge release` and install its printed APK on the QA device.
+3. Open the app once and confirm its baseline behavior.
+4. Make a compatible Dart-only change and run `patchforge patch`.
+5. Open the existing installed app and let it check for an update.
+6. After the patch is staged, close and reopen the app to activate it.
+7. Verify the new behavior and automatic boot confirmation in the app or
+   PatchForge console.
 
 To create and verify a local delta without publishing it:
 

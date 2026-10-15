@@ -18,7 +18,7 @@
           <span class="section-icon" aria-hidden="true">↗</span>
           <div><p class="kicker">SECURE ACCESS</p><h1>Connect to your server</h1></div>
         </header>
-        <p class="supporting-text">Use the publisher token generated during installation. The token stays in this browser tab only.</p>
+        <p class="supporting-text">Retrieve the publisher token on the VPS with <code>sudo patchforge publisher-token</code> or <code>sudo patchforge-dokploy publisher-token</code>. It stays in this browser tab only.</p>
         <label for="publisherToken">Publisher token</label>
         <input id="publisherToken" name="publisherToken" type="password" autocomplete="off" required placeholder="Enter publisher token">
         <button class="button primary" type="submit"><span aria-hidden="true">→</span> Connect</button>
@@ -112,7 +112,8 @@
               </header>
               <div class="code-block">
                 <span>Initialization command</span>
-                <pre id="initCommand">patchforge init --url https://your-server</pre>
+                <pre id="initCommand">patchforge login --url https://your-server
+patchforge init --url https://your-server</pre>
                 <button id="copyInit" class="icon-button copy-button" type="button" aria-label="Copy initialization command" title="Copy initialization command">□</button>
               </div>
               <dl class="details"><div><dt>App ID</dt><dd id="appIdValue">—</dd></div><div><dt>Signing key</dt><dd id="keyIdValue">—</dd></div><div><dt>Public key</dt><dd id="publicKeyValue" class="break">—</dd></div></dl>

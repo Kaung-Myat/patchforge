@@ -8,7 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::{
     env,
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, Read, Write},
+    io::{self, BufReader, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -30,14 +30,23 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Commands {
+    /// Save a publisher credential for a PatchForge server.
+    Login {
+        /// Public HTTPS URL of the PatchForge server.
+        #[arg(long)]
+        url: String,
+        /// Publisher token override. Omit it to enter the token securely.
+        #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+    },
     /// Connect this Flutter project to a PatchForge server.
     Init {
         /// Public HTTPS URL of the PatchForge server.
         #[arg(long)]
         url: String,
-        /// Publisher token. PATCHFORGE_TOKEN is recommended for automation.
+        /// Publisher token override. Saved credentials are used by default.
         #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
-        token: String,
+        token: Option<String>,
         /// App name to create or reuse when --app-id is omitted.
         #[arg(long, default_value = "PatchForge App")]
         app_name: String,
@@ -429,7 +438,7 @@ struct PublishOptions<'a> {
 
 struct InitOptions<'a> {
     server_url: &'a str,
-    token: &'a str,
+    token: Option<&'a str>,
     app_name: &'a str,
     app_id: Option<&'a str>,
     platform: &'a str,
@@ -656,6 +665,13 @@ fn credential_path(server_url: &str, app_id: &str) -> Result<PathBuf> {
         .join(format!("{}-{app_id}.token", &server_fingerprint[..16])))
 }
 
+fn server_credential_path(server_url: &str) -> Result<PathBuf> {
+    let server_fingerprint = hex::encode(Sha256::digest(server_url.as_bytes()));
+    Ok(patchforge_config_home()?
+        .join("credentials")
+        .join(format!("{}.token", &server_fingerprint[..16])))
+}
+
 fn write_private_token(path: &Path, token: &str) -> Result<()> {
     let parent = path
         .parent()
@@ -679,6 +695,90 @@ fn write_private_token(path: &Path, token: &str) -> Result<()> {
     file.flush()?;
     #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+fn read_private_token(path: &Path) -> Result<String> {
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(path)
+            .with_context(|| format!("Failed to inspect publisher credential {}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            bail!(
+                "Publisher token file must not be accessible by group or others: {}",
+                path.display()
+            );
+        }
+    }
+    let token = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read publisher credential {}", path.display()))?
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        bail!("Publisher token is empty: {}", path.display());
+    }
+    Ok(token)
+}
+
+fn prompt_publisher_token(server_url: &str) -> Result<String> {
+    if !io::stdin().is_terminal() {
+        bail!(
+            "No publisher credential is available for {server_url}. Run `patchforge login --url {server_url}` in a terminal or set PATCHFORGE_TOKEN for automation"
+        );
+    }
+    let token = rpassword::prompt_password("Publisher token: ")?
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        bail!("Publisher token cannot be empty");
+    }
+    Ok(token)
+}
+
+fn setup_token(server_url: &str, override_token: Option<&str>) -> Result<String> {
+    if let Some(token) = override_token {
+        let token = token.trim();
+        if token.is_empty() {
+            bail!("Publisher token cannot be empty");
+        }
+        return Ok(token.to_string());
+    }
+
+    let path = server_credential_path(server_url)?;
+    if path.exists() {
+        return read_private_token(&path);
+    }
+    prompt_publisher_token(server_url)
+}
+
+fn login_to_server(server_url: &str, token_override: Option<&str>) -> Result<()> {
+    let server_url = normalize_server_url(server_url)?;
+    let token = match token_override {
+        Some(token) => setup_token(&server_url, Some(token))?,
+        None => prompt_publisher_token(&server_url)?,
+    };
+    let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    checked_response(
+        client.get(api_url(&server_url, "health")).send()?,
+        "Checking PatchForge server health",
+    )?;
+    checked_response(
+        client
+            .get(api_url(&server_url, "api/v1/system"))
+            .bearer_auth(&token)
+            .send()?,
+        "Authenticating publisher credential",
+    )?;
+
+    let path = server_credential_path(&server_url)?;
+    write_private_token(&path, &token)?;
+    println!("Publisher login saved.");
+    println!("Server: {server_url}");
+    println!("Credential: {}", path.display());
+    println!("The raw token was not written to the project or printed.");
     Ok(())
 }
 
@@ -1202,33 +1302,11 @@ fn build_and_publish_project_patch(
 }
 
 fn publisher_token(config: &ProjectConfig, override_token: Option<String>) -> Result<String> {
-    let token = match override_token {
-        Some(token) => token,
-        None => {
-            let publisher_token_file = credential_path(&config.server_url, &config.app_id)?;
-            #[cfg(unix)]
-            {
-                let mode = fs::metadata(&publisher_token_file)?.permissions().mode() & 0o777;
-                if mode & 0o077 != 0 {
-                    bail!(
-                        "Publisher token file must not be accessible by group or others: {}",
-                        publisher_token_file.display()
-                    );
-                }
-            }
-            fs::read_to_string(&publisher_token_file).with_context(|| {
-                format!(
-                    "Failed to read publisher credential {}",
-                    publisher_token_file.display()
-                )
-            })?
-        }
-    };
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        bail!("Publisher token is empty");
+    match override_token {
+        Some(token) if !token.trim().is_empty() => Ok(token.trim().to_string()),
+        Some(_) => bail!("Publisher token is empty"),
+        None => read_private_token(&credential_path(&config.server_url, &config.app_id)?),
     }
-    Ok(token)
 }
 
 fn doctor(config_path: &Path, token_override: Option<String>) -> Result<()> {
@@ -1511,9 +1589,10 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
         client.get(api_url(&server_url, "health")).send()?,
         "Checking PatchForge server health",
     )?;
+    let token = setup_token(&server_url, options.token)?;
     let apps_url = api_url(&server_url, "api/v1/apps");
     let apps: Vec<AppRecord> = checked_response(
-        client.get(&apps_url).bearer_auth(options.token).send()?,
+        client.get(&apps_url).bearer_auth(&token).send()?,
         "Reading server apps",
     )?
     .json()?;
@@ -1530,7 +1609,7 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
             0 => checked_response(
                 client
                     .post(&apps_url)
-                    .bearer_auth(options.token)
+                    .bearer_auth(&token)
                     .json(&CreateAppRequest {
                         name: options.app_name.trim(),
                     })
@@ -1549,7 +1628,7 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
     let signing_keys: Vec<SigningKeyRecord> = checked_response(
         client
             .get(api_url(&server_url, "api/v1/signing-keys"))
-            .bearer_auth(options.token)
+            .bearer_auth(&token)
             .send()?,
         "Reading signing keys",
     )?
@@ -1565,7 +1644,8 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
     }
 
     let publisher_token_file = credential_path(&server_url, &app.id)?;
-    write_private_token(&publisher_token_file, options.token)?;
+    write_private_token(&publisher_token_file, &token)?;
+    write_private_token(&server_credential_path(&server_url)?, &token)?;
     let project = ProjectConfig {
         schema_version: 1,
         server_url,
@@ -2288,6 +2368,7 @@ fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let cli = Cli::parse();
     match cli.command {
+        Commands::Login { url, token } => login_to_server(&url, token.as_deref())?,
         Commands::Init {
             url,
             token,
@@ -2299,7 +2380,7 @@ fn main() -> Result<()> {
             force,
         } => initialize_project(InitOptions {
             server_url: &url,
-            token: &token,
+            token: token.as_deref(),
             app_name: &app_name,
             app_id: app_id.as_deref(),
             platform: &platform,
@@ -2636,16 +2717,19 @@ mod tests {
 
     #[test]
     fn parses_config_driven_workflow_commands() {
-        let init = Cli::try_parse_from([
+        let login = Cli::try_parse_from([
             "patchforge",
-            "init",
+            "login",
             "--url",
             "https://updates.example.com",
-            "--token",
-            "secret",
         ])
         .unwrap();
-        assert!(matches!(init.command, Commands::Init { .. }));
+        assert!(matches!(login.command, Commands::Login { token: None, .. }));
+
+        let init =
+            Cli::try_parse_from(["patchforge", "init", "--url", "https://updates.example.com"])
+                .unwrap();
+        assert!(matches!(init.command, Commands::Init { token: None, .. }));
 
         let release = Cli::try_parse_from(["patchforge", "release", "--version", "1.0.0"]).unwrap();
         assert!(matches!(
@@ -2746,6 +2830,7 @@ mod tests {
     #[test]
     fn top_level_help_includes_the_primary_workflow_and_diagnostics() {
         let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("login"));
         assert!(help.contains("init"));
         assert!(help.contains("doctor"));
         assert!(help.contains("release"));

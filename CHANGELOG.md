@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2
+
+- Add `patchforge login` with a hidden publisher-token prompt and protected
+  server-wide credentials, so `patchforge init` no longer requires `--token`.
+- Add root-only publisher-token retrieval commands for standalone and Dokploy
+  installations and show the complete login/init sequence in the web console.
+- Rewrite onboarding documentation around server administrator, Flutter
+  publisher, and QA tester responsibilities and state the Android QA scope.
+
 ## 0.6.1
 
 - Make Android release apps inherit the SDK's required Internet permission so

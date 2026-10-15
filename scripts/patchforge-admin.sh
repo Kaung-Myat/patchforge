@@ -18,6 +18,21 @@ compose() {
   docker compose --env-file "$CONFIG_FILE" -f "$COMPOSE_FILE" "$@"
 }
 
+show_publisher_token() {
+  local token_file="$INSTALL_DIR/secrets/publisher-token"
+  if [[ ! -s "$token_file" ]]; then
+    echo "Publisher token is missing or empty: $token_file" >&2
+    exit 1
+  fi
+  if [[ "$(stat -c '%a' "$token_file")" != "600" ]]; then
+    echo "Publisher token must have mode 600: $token_file" >&2
+    exit 1
+  fi
+  echo "Sensitive publisher credential follows. Store it securely and never commit it." >&2
+  cat "$token_file"
+  echo
+}
+
 set -a
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
@@ -52,6 +67,9 @@ case "$COMMAND" in
     echo "Database backup created: $BACKUP"
     echo "Patch artifacts remain in: $INSTALL_DIR/storage"
     ;;
+  publisher-token)
+    show_publisher_token
+    ;;
   doctor)
     compose config --quiet
     compose ps
@@ -67,7 +85,7 @@ case "$COMMAND" in
     echo "PatchForge doctor: all checks passed"
     ;;
   *)
-    echo "Usage: sudo patchforge {status|logs [service]|restart|update|backup|doctor}" >&2
+    echo "Usage: sudo patchforge {status|logs [service]|restart|update|backup|doctor|publisher-token}" >&2
     exit 2
     ;;
 esac

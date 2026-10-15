@@ -82,6 +82,21 @@ show_status() {
     --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
 }
 
+show_publisher_token() {
+  local token_file="$INSTALL_DIR/secrets/publisher-token"
+  if [[ ! -s "$token_file" ]]; then
+    echo "Publisher token is missing or empty: $token_file" >&2
+    exit 1
+  fi
+  if [[ "$(stat -c '%a' "$token_file")" != "600" ]]; then
+    echo "Publisher token must have mode 600: $token_file" >&2
+    exit 1
+  fi
+  echo "Sensitive publisher credential follows. Store it securely and never commit it." >&2
+  cat "$token_file"
+  echo
+}
+
 COMMAND="${1:-status}"
 case "$COMMAND" in
   status)
@@ -109,6 +124,9 @@ case "$COMMAND" in
     echo "Database backup created: $BACKUP"
     echo "Patch artifacts remain in: ${PATCHFORGE_STORAGE_DIR:-$INSTALL_DIR/storage}"
     ;;
+  publisher-token)
+    show_publisher_token
+    ;;
   doctor)
     PATCHFORGE_DOMAIN="$(resolve_domain)"
     show_status
@@ -128,7 +146,7 @@ case "$COMMAND" in
     echo "PatchForge Dokploy doctor: all checks passed"
     ;;
   *)
-    echo "Usage: sudo patchforge-dokploy {status|logs [server|postgres]|backup|doctor}" >&2
+    echo "Usage: sudo patchforge-dokploy {status|logs [server|postgres]|backup|doctor|publisher-token}" >&2
     echo "Deployments, restarts, and image updates are managed from the Dokploy UI." >&2
     exit 2
     ;;
