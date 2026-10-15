@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1
+
+- Make Android release apps inherit the SDK's required Internet permission so
+  update checks and artifact downloads work in clean Flutter projects.
+- Add `patchforge doctor` to verify the Flutter project, SDK version, local
+  build tools, protected publisher credential, live server, application,
+  signing identity, and active release without exposing secrets.
+- Build a clean temporary Flutter Android release in CI and assert that the
+  SDK provider and Internet permission are present in the merged manifest.
+
 ## 0.6.0
 
 - Make `patchforge release` run the configured Flutter Android release build,

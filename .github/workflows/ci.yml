@@ -70,6 +70,10 @@ jobs:
       - name: Run tests
         run: flutter test
 
+      - name: Test a clean Flutter release integration
+        working-directory: ${{ github.workspace }}
+        run: scripts/test-flutter-onboarding.sh
+
   deployment:
     name: Deployment files
     runs-on: ubuntu-latest

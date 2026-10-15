@@ -55,6 +55,15 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Check this Flutter project's local tools, configuration, and server connection.
+    Doctor {
+        /// Project configuration file to check.
+        #[arg(long, default_value = "patchforge.yaml")]
+        config: PathBuf,
+        /// Publisher token override. Saved credentials are used by default.
+        #[arg(long, env = "PATCHFORGE_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+    },
     /// Build and register the baseline release for this Flutter project.
     Release {
         #[command(subcommand)]
@@ -293,6 +302,24 @@ struct SigningKeyRecord {
     key_id: String,
     public_key_base64: String,
     status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SystemInfo {
+    server_version: String,
+    storage: SystemStorageInfo,
+    signing: SystemSigningInfo,
+}
+
+#[derive(Debug, Deserialize)]
+struct SystemStorageInfo {
+    provider: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SystemSigningInfo {
+    key_id: String,
+    public_key_base64: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -747,6 +774,91 @@ fn validate_flutter_project_for_init(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn locked_package_version(root: &Path, package: &str) -> Result<String> {
+    let path = root.join("pubspec.lock");
+    let source = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "Failed to read {}. Run `flutter pub get` first",
+            path.display()
+        )
+    })?;
+    let lockfile: serde_yaml::Value = serde_yaml::from_str(&source)
+        .with_context(|| format!("Invalid Flutter lockfile at {}", path.display()))?;
+    lockfile
+        .get("packages")
+        .and_then(|packages| packages.get(package))
+        .and_then(|entry| entry.get("version"))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::to_string)
+        .with_context(|| format!("{package} is missing from {}", path.display()))
+}
+
+fn parse_version_core(value: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = value
+        .split_once('-')
+        .map_or(value, |(core, _)| core)
+        .split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+fn version_at_least(value: &str, minimum: &str) -> bool {
+    match (parse_version_core(value), parse_version_core(minimum)) {
+        (Some(value), Some(minimum)) => value >= minimum,
+        _ => false,
+    }
+}
+
+fn executable_in_path(name: &str) -> Option<PathBuf> {
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|path| path.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+#[derive(Default)]
+struct DoctorReport {
+    passed: usize,
+    warnings: usize,
+    failures: Vec<String>,
+}
+
+impl DoctorReport {
+    fn pass(&mut self, label: &str, detail: impl AsRef<str>) {
+        self.passed += 1;
+        println!("[PASS] {label}: {}", detail.as_ref());
+    }
+
+    fn warn(&mut self, label: &str, detail: impl AsRef<str>) {
+        self.warnings += 1;
+        println!("[WARN] {label}: {}", detail.as_ref());
+    }
+
+    fn fail(&mut self, label: &str, detail: impl AsRef<str>) {
+        let detail = detail.as_ref();
+        println!("[FAIL] {label}: {detail}");
+        self.failures.push(format!("{label}: {detail}"));
+    }
+
+    fn finish(self) -> Result<()> {
+        println!();
+        if self.failures.is_empty() {
+            println!(
+                "PatchForge doctor: all required checks passed ({} passed, {} warnings)",
+                self.passed, self.warnings
+            );
+            return Ok(());
+        }
+        bail!(
+            "PatchForge doctor found {} required issue(s); fix the [FAIL] items above",
+            self.failures.len()
+        )
+    }
+}
+
 fn ensure_gitignore_entry(root: &Path, entry: &str) -> Result<bool> {
     let path = root.join(".gitignore");
     let source = match fs::read_to_string(&path) {
@@ -1117,6 +1229,261 @@ fn publisher_token(config: &ProjectConfig, override_token: Option<String>) -> Re
         bail!("Publisher token is empty");
     }
     Ok(token)
+}
+
+fn doctor(config_path: &Path, token_override: Option<String>) -> Result<()> {
+    const MINIMUM_SDK_VERSION: &str = "0.6.1";
+
+    println!("PatchForge doctor");
+    println!("Project: {}", project_root(config_path).display());
+    println!();
+
+    let root = project_root(config_path);
+    let mut report = DoctorReport::default();
+
+    match validate_flutter_project_for_init(root) {
+        Ok(()) => report.pass("Flutter project", root.display().to_string()),
+        Err(error) => report.fail("Flutter project", format!("{error:#}")),
+    }
+
+    if root.join("android").is_dir() {
+        report.pass(
+            "Android project",
+            root.join("android").display().to_string(),
+        );
+    } else {
+        report.fail(
+            "Android project",
+            "android/ is missing; PatchForge currently supports Flutter Android apps",
+        );
+    }
+
+    match locked_package_version(root, "patchforge_sdk") {
+        Ok(version) if version_at_least(&version, MINIMUM_SDK_VERSION) => {
+            report.pass("PatchForge SDK", version)
+        }
+        Ok(version) => report.fail(
+            "PatchForge SDK",
+            format!(
+                "version {version} is too old; run `flutter pub add patchforge_sdk:^{MINIMUM_SDK_VERSION}`"
+            ),
+        ),
+        Err(error) => report.fail("PatchForge SDK", format!("{error:#}")),
+    }
+
+    match Command::new("flutter").arg("--version").output() {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("flutter is available")
+                .trim()
+                .to_string();
+            report.pass("Flutter command", version);
+        }
+        Ok(output) => report.fail(
+            "Flutter command",
+            format!("`flutter --version` exited with {}", output.status),
+        ),
+        Err(error) => report.fail(
+            "Flutter command",
+            format!("{error}; install Flutter and add it to PATH"),
+        ),
+    }
+
+    for tool in ["bsdiff", "bspatch"] {
+        match executable_in_path(tool) {
+            Some(path) => report.pass(tool, path.display().to_string()),
+            None => report.fail(
+                tool,
+                "not found in PATH; install the bsdiff package before publishing patches",
+            ),
+        }
+    }
+
+    let gitignore = fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
+    if gitignore.lines().any(|line| line.trim() == ".patchforge/") {
+        report.pass("Local state ignore", ".patchforge/ is excluded from Git");
+    } else {
+        report.warn(
+            "Local state ignore",
+            "add `.patchforge/` to .gitignore before creating a release",
+        );
+    }
+
+    let config = match load_project_config(config_path) {
+        Ok(config) => {
+            report.pass("Project configuration", config_path.display().to_string());
+            Some(config)
+        }
+        Err(error) => {
+            report.fail("Project configuration", format!("{error:#}"));
+            None
+        }
+    };
+
+    if let Some(config) = config {
+        let credential_description = if token_override.is_some() {
+            "provided securely for this command".to_string()
+        } else {
+            credential_path(&config.server_url, &config.app_id)
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| "saved publisher credential".to_string())
+        };
+        let token = match publisher_token(&config, token_override) {
+            Ok(token) => {
+                report.pass("Publisher credential", credential_description);
+                Some(token)
+            }
+            Err(error) => {
+                report.fail("Publisher credential", format!("{error:#}"));
+                None
+            }
+        };
+
+        let client = match Client::builder().timeout(Duration::from_secs(15)).build() {
+            Ok(client) => Some(client),
+            Err(error) => {
+                report.fail("HTTP client", error.to_string());
+                None
+            }
+        };
+
+        if let Some(client) = client.as_ref() {
+            match client.get(api_url(&config.server_url, "health")).send() {
+                Ok(response) => match checked_response(response, "Server health check") {
+                    Ok(_) => report.pass("Server health", &config.server_url),
+                    Err(error) => report.fail("Server health", format!("{error:#}")),
+                },
+                Err(error) => report.fail("Server health", error.to_string()),
+            }
+        }
+
+        if let (Some(client), Some(token)) = (client.as_ref(), token.as_ref()) {
+            let system = match client
+                .get(api_url(&config.server_url, "api/v1/system"))
+                .bearer_auth(token)
+                .send()
+                .and_then(Response::error_for_status)
+            {
+                Ok(response) => match response.json::<SystemInfo>() {
+                    Ok(system) => {
+                        report.pass(
+                            "Publisher authentication",
+                            format!(
+                                "server {} using {} storage",
+                                system.server_version, system.storage.provider
+                            ),
+                        );
+                        Some(system)
+                    }
+                    Err(error) => {
+                        report.fail("Publisher authentication", error.to_string());
+                        None
+                    }
+                },
+                Err(error) => {
+                    report.fail("Publisher authentication", error.to_string());
+                    None
+                }
+            };
+
+            match client
+                .get(api_url(&config.server_url, "api/v1/apps"))
+                .bearer_auth(token)
+                .send()
+                .and_then(Response::error_for_status)
+            {
+                Ok(response) => match response.json::<Vec<AppRecord>>() {
+                    Ok(apps) => match apps.into_iter().find(|app| app.id == config.app_id) {
+                        Some(app) if app.name == config.app_name => {
+                            report.pass("Application", format!("{} ({})", app.name, app.id))
+                        }
+                        Some(app) => report.warn(
+                            "Application",
+                            format!(
+                                "ID exists but server name '{}' differs from local name '{}'",
+                                app.name, config.app_name
+                            ),
+                        ),
+                        None => report.fail(
+                            "Application",
+                            format!("{} does not exist on this server", config.app_id),
+                        ),
+                    },
+                    Err(error) => report.fail("Application", error.to_string()),
+                },
+                Err(error) => report.fail("Application", error.to_string()),
+            }
+
+            if let Some(system) = system {
+                if system.signing.key_id == config.signing_key_id
+                    && system.signing.public_key_base64 == config.signing_public_key
+                {
+                    report.pass("Signing identity", config.signing_key_id.clone());
+                } else {
+                    report.fail(
+                        "Signing identity",
+                        format!(
+                            "server active key '{}' does not match local key '{}'; rerun `patchforge init --force` after reviewing the rotation",
+                            system.signing.key_id, config.signing_key_id
+                        ),
+                    );
+                }
+            }
+
+            if let Some(release_id) = config.release_id.as_deref() {
+                match client
+                    .get(api_url(
+                        &config.server_url,
+                        &format!("api/v1/apps/{}/releases", config.app_id),
+                    ))
+                    .bearer_auth(token)
+                    .send()
+                    .and_then(Response::error_for_status)
+                {
+                    Ok(response) => match response.json::<Vec<ReleaseRecord>>() {
+                        Ok(releases) => match releases
+                            .into_iter()
+                            .find(|release| release.id == release_id)
+                        {
+                            Some(release)
+                                if Some(release.version.as_str())
+                                    == config.release_version.as_deref()
+                                    && release.platform == config.platform
+                                    && release.channel == config.channel =>
+                            {
+                                report.pass(
+                                    "Active release",
+                                    format!(
+                                        "{} · {} · {}",
+                                        release.version, release.platform, release.channel
+                                    ),
+                                );
+                            }
+                            Some(_) => report.fail(
+                                "Active release",
+                                "server release metadata differs from patchforge.yaml",
+                            ),
+                            None => report.fail(
+                                "Active release",
+                                format!("{release_id} does not exist for this app"),
+                            ),
+                        },
+                        Err(error) => report.fail("Active release", error.to_string()),
+                    },
+                    Err(error) => report.fail("Active release", error.to_string()),
+                }
+            } else {
+                report.warn(
+                    "Active release",
+                    "none selected yet; run `patchforge release` when the store build is ready",
+                );
+            }
+        }
+    }
+
+    report.finish()
 }
 
 fn initialize_project(options: InitOptions<'_>) -> Result<()> {
@@ -1940,6 +2307,7 @@ fn main() -> Result<()> {
             config_path: &config,
             force,
         })?,
+        Commands::Doctor { config, token } => doctor(&config, token)?,
         Commands::Release {
             command,
             version,
@@ -2116,9 +2484,10 @@ mod tests {
     use super::{
         Cli, Commands, PatchCommands, ProjectConfig, ReleaseCommands, android_build_target,
         api_url, artifact_path, cached_runtime_path, ensure_gitignore_entry, flutter_build_defines,
-        flutter_project_version, load_project_config, normalize_server_url, release_apk_path,
-        release_runtime_path, save_project_config, sha256_reader,
+        flutter_project_version, load_project_config, locked_package_version, normalize_server_url,
+        release_apk_path, release_runtime_path, save_project_config, sha256_reader,
         validate_flutter_project_for_init, validate_remote_storage_dir, validate_ssh_target,
+        version_at_least,
     };
     use tempfile::TempDir;
 
@@ -2233,6 +2602,25 @@ mod tests {
     }
 
     #[test]
+    fn reads_and_validates_the_locked_sdk_version() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("pubspec.lock"),
+            "packages:\n  patchforge_sdk:\n    dependency: direct main\n    source: hosted\n    version: \"0.6.1\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            locked_package_version(temp.path(), "patchforge_sdk").unwrap(),
+            "0.6.1"
+        );
+        assert!(version_at_least("0.6.1", "0.6.1"));
+        assert!(version_at_least("0.7.0", "0.6.1"));
+        assert!(!version_at_least("0.6.0", "0.6.1"));
+        assert!(!version_at_least("invalid", "0.6.1"));
+    }
+
+    #[test]
     fn adds_patchforge_state_to_gitignore_once() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join(".gitignore");
@@ -2278,6 +2666,9 @@ mod tests {
                 ..
             }
         ));
+
+        let doctor = Cli::try_parse_from(["patchforge", "doctor"]).unwrap();
+        assert!(matches!(doctor.command, Commands::Doctor { .. }));
 
         let patch = Cli::try_parse_from([
             "patchforge",
@@ -2353,9 +2744,10 @@ mod tests {
     }
 
     #[test]
-    fn top_level_help_focuses_on_the_three_step_workflow() {
+    fn top_level_help_includes_the_primary_workflow_and_diagnostics() {
         let help = Cli::command().render_long_help().to_string();
         assert!(help.contains("init"));
+        assert!(help.contains("doctor"));
         assert!(help.contains("release"));
         assert!(help.contains("patch"));
         for hidden in ["token-hash", "publish", "verify"] {

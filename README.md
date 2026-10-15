@@ -121,7 +121,23 @@ authentication; creates or reuses the named app; discovers the active Ed25519
 public key; writes a shareable `patchforge.yaml`; and adds `.patchforge/` to
 the project's `.gitignore`. The raw publisher token is stored separately under
 `~/.config/patchforge/credentials` with mode `0600`; it is never written to the
-project configuration. Configure the Flutter SDK once with values that the CLI
+project configuration.
+
+Run the project doctor before the first release or whenever a workstation or
+server configuration changes:
+
+```bash
+patchforge doctor
+```
+
+It checks the Flutter and Android project, requires `patchforge_sdk` 0.6.1 or
+newer, verifies `flutter`, `bsdiff`, and `bspatch`, validates the protected
+publisher credential, reaches the server, authenticates management access, and
+compares the application, signing identity, and active release with
+`patchforge.yaml`. Warnings do not fail the command; every `[FAIL]` item must be
+fixed before publishing.
+
+Configure the Flutter SDK once with values that the CLI
 injects automatically during release builds, and start the update check after
 the first app frame:
 
