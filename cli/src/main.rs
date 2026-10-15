@@ -725,6 +725,55 @@ fn flutter_project_version(path: &Path) -> Result<String> {
     Ok(version.to_string())
 }
 
+fn validate_flutter_project_for_init(root: &Path) -> Result<()> {
+    let pubspec_path = root.join("pubspec.yaml");
+    let source = fs::read_to_string(&pubspec_path).with_context(|| {
+        format!(
+            "Flutter pubspec not found at {}. Run PatchForge from the Flutter project root",
+            pubspec_path.display()
+        )
+    })?;
+    let pubspec: serde_yaml::Value = serde_yaml::from_str(&source)
+        .with_context(|| format!("Invalid Flutter pubspec at {}", pubspec_path.display()))?;
+    let has_sdk = pubspec
+        .get("dependencies")
+        .and_then(|dependencies| dependencies.get("patchforge_sdk"))
+        .is_some();
+    if !has_sdk {
+        bail!(
+            "Flutter dependency 'patchforge_sdk' is missing. Run `flutter pub add patchforge_sdk` before `patchforge init`"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_gitignore_entry(root: &Path, entry: &str) -> Result<bool> {
+    let path = root.join(".gitignore");
+    let source = match fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to read {}", path.display()));
+        }
+    };
+    if source.lines().any(|line| line.trim() == entry) {
+        return Ok(false);
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    if !source.is_empty() && !source.ends_with('\n') {
+        file.write_all(b"\n")?;
+    }
+    file.write_all(entry.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    Ok(true)
+}
+
 fn project_root(config_path: &Path) -> &Path {
     config_path
         .parent()
@@ -1087,6 +1136,8 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
     if !is_supported_channel(options.channel) {
         bail!("Unsupported channel '{}'", options.channel);
     }
+    let root = project_root(options.config_path);
+    validate_flutter_project_for_init(root)?;
 
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
     checked_response(
@@ -1161,6 +1212,7 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
         release_version: None,
     };
     save_project_config(options.config_path, &project, options.force)?;
+    let added_gitignore = ensure_gitignore_entry(root, ".patchforge/")?;
 
     println!("PatchForge project initialized.");
     println!("Configuration: {}", options.config_path.display());
@@ -1179,7 +1231,15 @@ fn initialize_project(options: InitOptions<'_>) -> Result<()> {
     );
     println!("  channel: '{}'", project.channel);
     println!();
-    println!("Next: patchforge release");
+    if added_gitignore {
+        println!(
+            "Added .patchforge/ to {}",
+            root.join(".gitignore").display()
+        );
+    }
+    println!("Next:");
+    println!("  1. Create PatchForgeConfig.fromEnvironment() at app startup and call update().");
+    println!("  2. Run `patchforge release`.");
     Ok(())
 }
 
@@ -2055,10 +2115,10 @@ mod tests {
 
     use super::{
         Cli, Commands, PatchCommands, ProjectConfig, ReleaseCommands, android_build_target,
-        api_url, artifact_path, cached_runtime_path, flutter_build_defines,
+        api_url, artifact_path, cached_runtime_path, ensure_gitignore_entry, flutter_build_defines,
         flutter_project_version, load_project_config, normalize_server_url, release_apk_path,
-        release_runtime_path, save_project_config, sha256_reader, validate_remote_storage_dir,
-        validate_ssh_target,
+        release_runtime_path, save_project_config, sha256_reader,
+        validate_flutter_project_for_init, validate_remote_storage_dir, validate_ssh_target,
     };
     use tempfile::TempDir;
 
@@ -2150,6 +2210,40 @@ mod tests {
         let path = temp.path().join("pubspec.yaml");
         std::fs::write(&path, "name: example\nversion: 1.2.3+42\n").unwrap();
         assert_eq!(flutter_project_version(&path).unwrap(), "1.2.3");
+    }
+
+    #[test]
+    fn validates_public_flutter_sdk_dependency() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("pubspec.yaml");
+        std::fs::write(
+            &path,
+            "name: example\ndependencies:\n  flutter:\n    sdk: flutter\n  patchforge_sdk: ^0.6.0\n",
+        )
+        .unwrap();
+        validate_flutter_project_for_init(temp.path()).unwrap();
+
+        std::fs::write(
+            &path,
+            "name: example\ndependencies:\n  flutter:\n    sdk: flutter\n",
+        )
+        .unwrap();
+        let error = validate_flutter_project_for_init(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("flutter pub add patchforge_sdk"));
+    }
+
+    #[test]
+    fn adds_patchforge_state_to_gitignore_once() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(".gitignore");
+        std::fs::write(&path, ".dart_tool/\n").unwrap();
+
+        assert!(ensure_gitignore_entry(temp.path(), ".patchforge/").unwrap());
+        assert!(!ensure_gitignore_entry(temp.path(), ".patchforge/").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            ".dart_tool/\n.patchforge/\n"
+        );
     }
 
     #[test]

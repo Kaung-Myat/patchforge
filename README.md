@@ -116,18 +116,47 @@ patchforge init \
 unset PATCHFORGE_TOKEN
 ```
 
-`patchforge init` verifies server health and authentication, creates or reuses
-the named app, discovers the active Ed25519 public key, and writes a shareable
-`patchforge.yaml` in the project. The raw publisher token is stored separately
-under `~/.config/patchforge/credentials` with mode `0600`; it is never written
-to the project configuration. Configure the Flutter SDK once with values that
-the CLI injects automatically during release builds:
+`patchforge init` verifies the public SDK dependency, server health, and
+authentication; creates or reuses the named app; discovers the active Ed25519
+public key; writes a shareable `patchforge.yaml`; and adds `.patchforge/` to
+the project's `.gitignore`. The raw publisher token is stored separately under
+`~/.config/patchforge/credentials` with mode `0600`; it is never written to the
+project configuration. Configure the Flutter SDK once with values that the CLI
+injects automatically during release builds, and start the update check after
+the first app frame:
 
 ```dart
-final patchForge = PatchForge(
-  config: PatchForgeConfig.fromEnvironment(),
-);
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
+import 'package:patchforge_sdk/patchforge_sdk.dart';
+
+late final PatchForge patchForge;
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  patchForge = PatchForge(
+    config: PatchForgeConfig.fromEnvironment(),
+  );
+  runApp(const MyApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(_checkForPatch());
+  });
+}
+
+Future<void> _checkForPatch() async {
+  try {
+    await patchForge.bootConfirmation;
+    await patchForge.update();
+  } catch (error) {
+    debugPrint('PatchForge update check failed: $error');
+  }
+}
 ```
+
+When an update is staged, it activates on the next normal app restart. The SDK
+then confirms the patched boot automatically after the first frame and its
+stabilization period.
 
 The normal publisher workflow then uses three top-level commands: `init`,
 `release`, and `patch`. Build and register the store release baseline:
