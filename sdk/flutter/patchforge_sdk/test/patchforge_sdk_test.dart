@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,18 @@ import 'package:patchforge_sdk/src/platform/base_artifact_locator.dart';
 import 'package:patchforge_sdk/src/security/signature_verifier.dart';
 
 void main() {
+  test('Android plugin declares the Internet permission for release apps', () {
+    final manifest = File(
+      'android/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+
+    expect(
+      manifest,
+      contains('android.permission.INTERNET'),
+      reason: 'Release Flutter apps do not inherit the debug-only permission.',
+    );
+  });
+
   test('environment configuration fails clearly without CLI build values', () {
     expect(PatchForgeConfig.fromEnvironment, throwsStateError);
   });

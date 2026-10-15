@@ -1,3 +1,8 @@
+## 0.6.1
+
+- Declare the Android `INTERNET` permission from the plugin so release builds
+  can check, download, and stage OTA patches without app-level manifest setup.
+
 ## 0.6.0
 
 - Add `PatchForgeConfig.fromEnvironment()` for values injected automatically
