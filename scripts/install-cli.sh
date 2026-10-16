@@ -35,8 +35,17 @@ fi
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
 
-curl -fsSL "$RELEASE_URL/$ASSET" -o "$TEMP_DIR/$ASSET"
-curl -fsSL "$RELEASE_URL/$ASSET.sha256" -o "$TEMP_DIR/$ASSET.sha256"
+CURL_ARGS=(
+  --fail
+  --show-error
+  --location
+  --retry 5
+  --retry-all-errors
+  --retry-delay 2
+)
+
+curl "${CURL_ARGS[@]}" "$RELEASE_URL/$ASSET" -o "$TEMP_DIR/$ASSET"
+curl "${CURL_ARGS[@]}" "$RELEASE_URL/$ASSET.sha256" -o "$TEMP_DIR/$ASSET.sha256"
 (
   cd "$TEMP_DIR"
   EXPECTED_SHA256="$(awk 'NR == 1 { print $1 }' "$ASSET.sha256")"

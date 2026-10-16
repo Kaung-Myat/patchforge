@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4
+
+- Retry CLI archive and checksum downloads after transient network failures,
+  including connection resets, before failing installation.
+- Add a deterministic installer regression test that verifies the retry policy,
+  checksum validation, archive extraction, and final executable installation.
+
 ## 0.6.3
 
 - Build one selected Android target without enabling APK ABI splits, avoiding

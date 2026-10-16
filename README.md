@@ -55,7 +55,7 @@ Download and inspect the versioned installer:
 
 ```bash
 curl --fail --show-error --location --retry 5 --retry-all-errors \
-  https://raw.githubusercontent.com/Kaung-Myat/patchforge/v0.6.3/scripts/install.sh \
+  https://raw.githubusercontent.com/Kaung-Myat/patchforge/v0.6.4/scripts/install.sh \
   -o install.sh
 
 less install.sh
@@ -66,7 +66,7 @@ Install PatchForge:
 ```bash
 sudo env \
   PATCHFORGE_DOMAIN=updates.example.com \
-  PATCHFORGE_INSTALL_VERSION=v0.6.3 \
+  PATCHFORGE_INSTALL_VERSION=v0.6.4 \
   bash install.sh
 ```
 
@@ -86,7 +86,7 @@ sudo patchforge publisher-token
 Clone the release on the VPS:
 
 ```bash
-sudo git clone --depth 1 --branch v0.6.3 \
+sudo git clone --depth 1 --branch v0.6.4 \
   https://github.com/Kaung-Myat/patchforge.git \
   /srv/patchforge
 
@@ -99,7 +99,7 @@ Generate fresh persistent configuration:
 ```bash
 sudo env \
   PATCHFORGE_DOMAIN=updates.example.com \
-  PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.6.3 \
+  PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.6.4 \
   bash scripts/prepare-dokploy-install.sh
 ```
 
@@ -108,7 +108,7 @@ Create a Dokploy Compose service with:
 | Setting | Value |
 | --- | --- |
 | Repository | `https://github.com/Kaung-Myat/patchforge` |
-| Branch/tag | `v0.6.3` |
+| Branch/tag | `v0.6.4` |
 | Compose path | `./deploy/dokploy.compose.yaml` |
 | Environment | Contents of `/opt/patchforge/dokploy.env` |
 | Domains tab with `sslip.io` | Leave empty |
@@ -155,11 +155,11 @@ developer machine:
 
 ```bash
 curl --fail --show-error --location --retry 5 --retry-all-errors \
-  https://raw.githubusercontent.com/Kaung-Myat/patchforge/v0.6.3/scripts/install-cli.sh \
+  https://raw.githubusercontent.com/Kaung-Myat/patchforge/v0.6.4/scripts/install-cli.sh \
   -o install-cli.sh
 
 less install-cli.sh
-PATCHFORGE_CLI_VERSION=v0.6.3 bash install-cli.sh
+PATCHFORGE_CLI_VERSION=v0.6.4 bash install-cli.sh
 ```
 
 Install `bsdiff` and `bspatch` through the workstation's package manager before
