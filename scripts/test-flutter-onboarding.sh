@@ -23,8 +23,7 @@ flutter create \
   flutter pub add "patchforge_sdk:{path: ${SDK_PATH}}" >/dev/null
   flutter build apk \
     --release \
-    --target-platform android-arm64 \
-    --split-per-abi >/dev/null
+    --target-platform android-arm64 >/dev/null
 )
 
 MANIFEST="$(find \
@@ -32,7 +31,7 @@ MANIFEST="$(find \
   -name AndroidManifest.xml \
   -print \
   -quit)"
-APK="${TEST_APP}/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk"
+APK="${TEST_APP}/build/app/outputs/flutter-apk/app-release.apk"
 
 test -n "${MANIFEST}"
 test -s "${APK}"

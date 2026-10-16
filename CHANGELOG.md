@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+- Build one selected Android target without enabling APK ABI splits, avoiding
+  Android Gradle Plugin conflicts in projects that already declare
+  `ndk.abiFilters`.
+- Keep automatic release and patch builds compatible with both clean Flutter
+  projects and existing Android projects that manage their own ABI filters.
+- Resolve a repeated runtime SHA to the newest matching patch target, so a
+  patch that restores baseline bytes can still advance the chain correctly.
+
 ## 0.6.2
 
 - Add `patchforge login` with a hidden publisher-token prompt and protected

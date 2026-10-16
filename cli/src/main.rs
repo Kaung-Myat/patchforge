@@ -436,6 +436,33 @@ struct PublishOptions<'a> {
     require_latest_base: bool,
 }
 
+fn resolve_base_patch_number(
+    base_hash: &str,
+    baseline_hash: &str,
+    architecture_patches: &[&PatchRecord],
+    architecture: &str,
+) -> Result<i32> {
+    // A later patch may intentionally restore bytes that appeared earlier in
+    // the chain, including the original release baseline. Prefer the newest
+    // matching patch target before treating a baseline hash as patch 0.
+    if let Some(patch_number) = architecture_patches
+        .iter()
+        .filter(|patch| patch.target_sha256.as_deref() == Some(base_hash))
+        .map(|patch| patch.patch_number)
+        .max()
+    {
+        return Ok(patch_number);
+    }
+
+    if base_hash == baseline_hash {
+        return Ok(0);
+    }
+
+    bail!(
+        "The supplied {architecture} base does not match the registered release baseline or any published patch target"
+    )
+}
+
 struct InitOptions<'a> {
     server_url: &'a str,
     token: Option<&'a str>,
@@ -995,9 +1022,9 @@ fn project_root(config_path: &Path) -> &Path {
 
 fn android_build_target(architecture: &str) -> Result<(&'static str, &'static str)> {
     match architecture {
-        "arm64-v8a" => Ok(("android-arm64", "app-arm64-v8a-release.apk")),
-        "armeabi-v7a" => Ok(("android-arm", "app-armeabi-v7a-release.apk")),
-        "x86_64" => Ok(("android-x64", "app-x86_64-release.apk")),
+        "arm64-v8a" => Ok(("android-arm64", "app-release.apk")),
+        "armeabi-v7a" => Ok(("android-arm", "app-release.apk")),
+        "x86_64" => Ok(("android-x64", "app-release.apk")),
         _ => bail!(
             "Unsupported architecture '{architecture}'. Expected arm64-v8a, armeabi-v7a, or x86_64"
         ),
@@ -1012,6 +1039,23 @@ fn flutter_build_defines(config: &ProjectConfig) -> Vec<String> {
         format!("PATCHFORGE_KEY_ID={}", config.signing_key_id),
         format!("PATCHFORGE_PUBLIC_KEY={}", config.signing_public_key),
     ]
+}
+
+fn flutter_build_arguments(config: &ProjectConfig, architecture: &str) -> Result<Vec<String>> {
+    let (target_platform, _) = android_build_target(architecture)?;
+    let mut arguments = vec![
+        "build".to_string(),
+        "apk".to_string(),
+        "--release".to_string(),
+        "--target-platform".to_string(),
+        target_platform.to_string(),
+    ];
+    arguments.extend(
+        flutter_build_defines(config)
+            .into_iter()
+            .map(|define| format!("--dart-define={define}")),
+    );
+    Ok(arguments)
 }
 
 fn build_flutter_apk(
@@ -1030,20 +1074,12 @@ fn build_flutter_apk(
             pubspec.display()
         );
     }
-    let (target_platform, apk_name) = android_build_target(architecture)?;
+    let (_, apk_name) = android_build_target(architecture)?;
     println!("Building Flutter release for {architecture}...");
     let mut command = Command::new("flutter");
-    command.current_dir(root).args([
-        "build",
-        "apk",
-        "--release",
-        "--target-platform",
-        target_platform,
-        "--split-per-abi",
-    ]);
-    for define in flutter_build_defines(config) {
-        command.arg(format!("--dart-define={define}"));
-    }
+    command
+        .current_dir(root)
+        .args(flutter_build_arguments(config, architecture)?);
     let status = command
         .status()
         .context("Failed to run Flutter. Is the flutter command available in PATH?")?;
@@ -2128,21 +2164,12 @@ fn publish(options: PublishOptions<'_>) -> Result<()> {
         created.sha256
     };
 
-    let base_patch_number = if base_hash == baseline_hash {
-        0
-    } else {
-        architecture_patches
-            .iter()
-            .filter(|patch| patch.target_sha256.as_deref() == Some(base_hash.as_str()))
-            .map(|patch| patch.patch_number)
-            .max()
-            .with_context(|| {
-                format!(
-                    "The supplied {} base does not match the registered release baseline or any published patch target",
-                    options.architecture
-                )
-            })?
-    };
+    let base_patch_number = resolve_base_patch_number(
+        &base_hash,
+        &baseline_hash,
+        &architecture_patches,
+        options.architecture,
+    )?;
 
     let latest_number = architecture_patches
         .iter()
@@ -2563,10 +2590,11 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        Cli, Commands, PatchCommands, ProjectConfig, ReleaseCommands, android_build_target,
-        api_url, artifact_path, cached_runtime_path, ensure_gitignore_entry, flutter_build_defines,
-        flutter_project_version, load_project_config, locked_package_version, normalize_server_url,
-        release_apk_path, release_runtime_path, save_project_config, sha256_reader,
+        Cli, Commands, PatchCommands, PatchRecord, ProjectConfig, ReleaseCommands,
+        android_build_target, api_url, artifact_path, cached_runtime_path, ensure_gitignore_entry,
+        flutter_build_arguments, flutter_build_defines, flutter_project_version,
+        load_project_config, locked_package_version, normalize_server_url, release_apk_path,
+        release_runtime_path, resolve_base_patch_number, save_project_config, sha256_reader,
         validate_flutter_project_for_init, validate_remote_storage_dir, validate_ssh_target,
         version_at_least,
     };
@@ -2804,12 +2832,28 @@ mod tests {
 
         assert_eq!(
             android_build_target("arm64-v8a").unwrap(),
-            ("android-arm64", "app-arm64-v8a-release.apk")
+            ("android-arm64", "app-release.apk")
         );
         assert!(android_build_target("unsupported").is_err());
         let defines = flutter_build_defines(&config);
         assert!(defines.contains(&"PATCHFORGE_APP_ID=app-id".to_string()));
         assert!(defines.contains(&"PATCHFORGE_CHANNEL=stable".to_string()));
+        let build_arguments = flutter_build_arguments(&config, "arm64-v8a").unwrap();
+        assert!(
+            build_arguments
+                .windows(2)
+                .any(|arguments| { arguments == ["--target-platform", "android-arm64"] })
+        );
+        assert!(
+            build_arguments
+                .iter()
+                .any(|argument| argument == "--dart-define=PATCHFORGE_APP_ID=app-id")
+        );
+        assert!(
+            !build_arguments
+                .iter()
+                .any(|argument| argument == "--split-per-abi")
+        );
         assert_eq!(
             cached_runtime_path(&config_path, &config, "arm64-v8a").unwrap(),
             temp.path()
@@ -2824,6 +2868,42 @@ mod tests {
             release_apk_path(&config_path, &config, "arm64-v8a").unwrap(),
             temp.path()
                 .join(".patchforge/releases/release-id/arm64-v8a/release.apk")
+        );
+    }
+
+    #[test]
+    fn resolves_repeated_runtime_hash_to_latest_patch_target() {
+        let patch = |patch_number, target_sha256: &str| PatchRecord {
+            id: format!("patch-{patch_number}"),
+            patch_number,
+            manifest_version: 2,
+            rollout_percentage: 100,
+            file_path: format!("patch-{patch_number}.patch"),
+            sha256: format!("artifact-{patch_number}"),
+            file_size: 1,
+            patch_format: Some("bsdiff".to_string()),
+            architecture: Some("arm64-v8a".to_string()),
+            base_sha256: None,
+            base_patch_number: Some(patch_number - 1),
+            target_sha256: Some(target_sha256.to_string()),
+            target_file_size: Some(1),
+        };
+        let patches = [patch(1, "changed"), patch(3, "baseline")];
+        let architecture_patches = patches.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            resolve_base_patch_number("baseline", "baseline", &architecture_patches, "arm64-v8a",)
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            resolve_base_patch_number("changed", "baseline", &architecture_patches, "arm64-v8a",)
+                .unwrap(),
+            1
+        );
+        assert!(
+            resolve_base_patch_number("unknown", "baseline", &architecture_patches, "arm64-v8a",)
+                .is_err()
         );
     }
 

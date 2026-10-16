@@ -19,7 +19,7 @@ cd /srv/patchforge
 
 sudo env \
   PATCHFORGE_DOMAIN=updates.example.com \
-  PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.6.2 \
+  PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.6.3 \
   bash scripts/prepare-dokploy-install.sh
 ```
 
@@ -64,7 +64,7 @@ In Dokploy:
 1. Create a project named `PatchForge`.
 2. Create a `Compose` service and select `Docker Compose`.
 3. Use the Git repository `https://github.com/Kaung-Myat/patchforge`.
-4. Select the release tag matching the server image, for example `v0.6.2`.
+4. Select the release tag matching the server image, for example `v0.6.3`.
 5. Set Compose Path to `./deploy/dokploy.compose.yaml`.
 6. Paste the output of `sudo cat /opt/patchforge/dokploy.env` into the
    Environment tab and save it.
