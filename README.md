@@ -148,9 +148,10 @@ artifacts are built on a trusted Flutter developer machine.
 
 ## Set up a Flutter project
 
-### 1. Install the CLI and SDK
+### 1. Install the CLI
 
-On the Flutter developer machine:
+The CLI installer can be downloaded and run from any directory on the Flutter
+developer machine:
 
 ```bash
 curl --fail --show-error --location --retry 5 --retry-all-errors \
@@ -159,14 +160,25 @@ curl --fail --show-error --location --retry 5 --retry-all-errors \
 
 less install-cli.sh
 PATCHFORGE_CLI_VERSION=v0.6.3 bash install-cli.sh
-
-flutter pub add patchforge_sdk
 ```
 
 Install `bsdiff` and `bspatch` through the workstation's package manager before
 publishing patches.
 
-### 2. Connect and initialize
+### 2. Create a Flutter project and install the SDK
+
+For a new project:
+
+```bash
+flutter create --org com.example patchforge_mobile_fresh_demo
+cd patchforge_mobile_fresh_demo
+flutter pub add patchforge_sdk
+```
+
+For an existing application, run `flutter pub add patchforge_sdk` from that
+application's root directory instead.
+
+### 3. Connect and initialize
 
 Create an application in the console and copy its App ID. Then run from the
 Flutter project root:
@@ -185,7 +197,7 @@ patchforge doctor
 mode `0600`. `patchforge init` creates a shareable `patchforge.yaml` containing
 only the server URL, App ID, channel, signing-key ID, and public key.
 
-### 3. Start update checks
+### 4. Start update checks
 
 Configure the SDK once near app startup:
 
