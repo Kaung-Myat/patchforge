@@ -1,192 +1,172 @@
 # PatchForge
 
-PatchForge is a self-hosted Flutter Android OTA proof of concept. It generates
-signed `bsdiff` deltas for `libapp.so`, verifies reconstructed artifacts, and
-serves update manifests to the Flutter SDK.
+Self-hosted OTA updates for controlled Flutter Android QA builds.
 
-> **Current scope:** use PatchForge with controlled Android QA builds that you
-> distribute as APKs. It is not yet recommended for production Google Play or
-> Apple App Store applications. iOS is not supported. Native-code, asset,
-> plugin, permission, and Flutter-engine changes require a new APK baseline;
-> the patch workflow is intended for compatible Dart AOT changes.
+PatchForge creates signed `bsdiff` patches for Flutter's `libapp.so`, publishes
+them from your VPS, verifies them on-device, and activates them after a safe app
+restart.
 
-## How the developer workflow is divided
+> [!IMPORTANT]
+> PatchForge is currently a proof of concept for privately distributed Android
+> QA APKs. It is not yet recommended for production Google Play or Apple App
+> Store applications. iOS is not supported.
 
-| Role | One-time work | Regular work |
-| --- | --- | --- |
-| Server administrator | Install PatchForge, configure HTTPS, back up secrets/data, give trusted publishers the server URL and publisher token | Monitor, back up, update, and rotate credentials |
-| Flutter developer | Install the SDK and CLI, run `patchforge login`, then `patchforge init` | Run `patchforge release` for each new APK baseline and `patchforge patch` for compatible Dart changes |
-| QA tester | Install the exact APK produced by `patchforge release` | Restart the app after a patch is staged and verify the changed behavior |
+```mermaid
+flowchart LR
+    Dev[Flutter developer] -->|release / patch| CLI[PatchForge CLI]
+    CLI -->|authenticated HTTPS| Server[Self-hosted server]
+    Server --> DB[(PostgreSQL)]
+    Server --> Store[(Patch storage)]
+    App[QA Android app] -->|signed manifest + delta| Server
+    App -->|restart| Updated[Updated Dart code]
+```
 
-The App ID, signing key ID, and signing public key are safe to include in the
-mobile build and `patchforge.yaml`. The **publisher token is a secret** with
-permission to create apps, releases, and patches. Never commit it, embed it in
-an APK, or send it to QA devices. The signing private key and database password
-must remain on the VPS.
+## Choose an installation
 
-## Install on a dedicated VPS
+Use only one deployment mode on a VPS. Standalone Caddy and Dokploy's Traefik
+both require ports 80 and 443, so they cannot run together.
 
-The packaged installer currently supports Ubuntu 22.04/24.04 on amd64 with a
-domain pointing to the VPS and inbound ports 80/443 open. Download and inspect
-the installer, then run it as root:
+```mermaid
+flowchart TD
+    Start{Does the VPS already use Dokploy?}
+    Start -->|No| Standalone[Standalone installer]
+    Start -->|Yes| Dokploy[Dokploy Compose deployment]
+    Standalone --> Console[PatchForge Console]
+    Dokploy --> Console
+```
+
+| VPS state | Installation | Reverse proxy | Best for |
+| --- | --- | --- | --- |
+| Clean Ubuntu 22.04/24.04 | [Standalone](#option-a-standalone-vps) | Caddy | Fastest setup |
+| Dokploy already installed | [Dokploy](#option-b-existing-dokploy-vps) | Traefik | Dokploy-managed deployments |
+
+Requirements: Ubuntu 22.04/24.04 amd64, a hostname pointing to the VPS, and
+inbound ports 80/443. An IP-based hostname such as
+`104-207-92-53.sslip.io` is suitable for testing.
+
+### Option A: standalone VPS
+
+Download and inspect the versioned installer:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/Kaung-Myat/patchforge/main/scripts/install.sh
+curl --fail --show-error --location --retry 5 --retry-all-errors \
+  https://raw.githubusercontent.com/Kaung-Myat/patchforge/v0.6.3/scripts/install.sh \
+  -o install.sh
+
 less install.sh
-sudo bash install.sh
 ```
 
-The installer adds Docker Engine and Compose when needed, generates the
-database password, Ed25519 signing key, and publisher credential, downloads a
-standalone production Compose bundle, starts the services, and verifies the
-public HTTPS health endpoint. Existing secrets are preserved when the installer
-is run again. Patch storage is writable only by the unprivileged API container;
-publishers upload verified artifacts through the authenticated HTTPS API and do
-not need a VPS account or direct filesystem access.
-
-Manage an installed server with:
-
-```bash
-sudo patchforge status
-sudo patchforge doctor
-sudo patchforge logs server
-sudo patchforge backup
-sudo patchforge update
-sudo patchforge publisher-token
-```
-
-Runtime files live under `/opt/patchforge`. The raw publisher credential is
-stored with mode `0600` at
-`/opt/patchforge/secrets/publisher-token`; the API container receives only its
-SHA-256 hash. Run `sudo patchforge publisher-token` on the VPS to retrieve it
-when onboarding a trusted publisher. Copy it once into a password manager, use
-it for `patchforge login`, and do not paste it into a project file. The private
-signing key is mounted only into the API container as a Compose secret.
-
-Open `https://your-domain/console/` after installation to use the built-in web
-console. Connect with the raw publisher token to see server status, create apps
-and releases, copy the mobile initialization command, and inspect patch chains.
-The token is kept only in the current browser tab's session storage and is
-removed when you disconnect or close the tab. Patch creation and publication
-remain CLI operations because they require local Flutter build artifacts.
-
-Server images are published to
-`ghcr.io/kaung-myat/patchforge-server` by the GitHub Actions workflow whenever a
-`v*` tag is pushed. Deployments use the `latest` tag by default; set
-`PATCHFORGE_SERVER_IMAGE` in `/opt/patchforge/config.env` to pin a release.
-
-### Manage PatchForge with Dokploy
-
-For a new Dokploy installation, one preparation command generates the database
-password, Ed25519 signing key, publisher credential, storage directories, and
-external PostgreSQL volume:
+Install PatchForge:
 
 ```bash
 sudo env \
   PATCHFORGE_DOMAIN=updates.example.com \
+  PATCHFORGE_INSTALL_VERSION=v0.6.3 \
+  bash install.sh
+```
+
+The installer creates the database, signing identity, publisher credential,
+artifact storage, HTTPS proxy, and management command under `/opt/patchforge`.
+
+```bash
+sudo patchforge doctor
+sudo patchforge status
+sudo patchforge publisher-token
+```
+
+### Option B: existing Dokploy VPS
+
+Clone the release on the VPS:
+
+```bash
+sudo git clone --depth 1 --branch v0.6.3 \
+  https://github.com/Kaung-Myat/patchforge.git \
+  /srv/patchforge
+
+sudo chown -R "$USER":"$USER" /srv/patchforge
+cd /srv/patchforge
+```
+
+Generate fresh persistent configuration:
+
+```bash
+sudo env \
+  PATCHFORGE_DOMAIN=updates.example.com \
+  PATCHFORGE_SERVER_IMAGE=ghcr.io/kaung-myat/patchforge-server:0.6.3 \
   bash scripts/prepare-dokploy-install.sh
 ```
 
-Create a Dokploy Compose service from this repository, select
-`deploy/dokploy.compose.yaml`, paste `/opt/patchforge/dokploy.env` into its
-Environment tab, and deploy. Verify the installation with:
+Create a Dokploy Compose service with:
+
+| Setting | Value |
+| --- | --- |
+| Repository | `https://github.com/Kaung-Myat/patchforge` |
+| Branch/tag | `v0.6.3` |
+| Compose path | `./deploy/dokploy.compose.yaml` |
+| Environment | Contents of `/opt/patchforge/dokploy.env` |
+| Domains tab with `sslip.io` | Leave empty |
+
+Deploy, then verify:
 
 ```bash
 sudo patchforge-dokploy doctor
 sudo patchforge-dokploy publisher-token
 ```
 
-The same built-in console is then available at
-`https://your-domain/console/`; no separate dashboard container or exposed
-database port is required.
+See [the complete Dokploy guide](docs/DOKPLOY.md) for migration, upgrades,
+resource limits, and recovery.
 
-An existing standalone installation can also be moved to Dokploy while
-preserving its PostgreSQL data, signing identity, publisher credential, and
-patch storage. Follow both workflows in [docs/DOKPLOY.md](docs/DOKPLOY.md).
-Dokploy's Traefik proxy replaces Caddy; do not run both stacks at the same time.
+## Open the console
 
-For production, select a release tag in Dokploy and pin
-`PATCHFORGE_SERVER_IMAGE` to the matching image version instead of `latest`.
-See [docs/RELEASE.md](docs/RELEASE.md) for the release checklist.
+Visit `https://updates.example.com/console/` and connect with the publisher
+token returned by `publisher-token`. The token stays in the current browser tab
+and must never be committed, embedded in an APK, or given to QA testers.
 
-## Set up a Flutter developer workstation
+The console creates applications and releases and displays patch chains. Patch
+artifacts are built on a trusted Flutter developer machine.
 
-Release tags publish a Linux amd64 CLI archive and checksum. Install the latest
-CLI as the current user (or run the reviewed script with `sudo` to install under
-`/usr/local/bin`):
+## Set up a Flutter project
+
+### 1. Install the CLI and SDK
+
+On the Flutter developer machine:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/Kaung-Myat/patchforge/main/scripts/install-cli.sh
+curl --fail --show-error --location --retry 5 --retry-all-errors \
+  https://raw.githubusercontent.com/Kaung-Myat/patchforge/v0.6.3/scripts/install-cli.sh \
+  -o install-cli.sh
+
 less install-cli.sh
-bash install-cli.sh
-```
+PATCHFORGE_CLI_VERSION=v0.6.3 bash install-cli.sh
 
-From a source checkout, use `cargo install --path cli --locked` instead.
-Install `bsdiff` on the publisher workstation before creating patches.
-
-Add the public Flutter package from the Flutter project root:
-
-```bash
 flutter pub add patchforge_sdk
 ```
 
-The server administrator gives a trusted Flutter publisher the HTTPS server URL
-and the raw publisher token. Save the token once with a hidden prompt; do not
-put it on the command line or in shell history:
+Install `bsdiff` and `bspatch` through the workstation's package manager before
+publishing patches.
+
+### 2. Connect and initialize
+
+Create an application in the console and copy its App ID. Then run from the
+Flutter project root:
 
 ```bash
 patchforge login --url https://updates.example.com
-```
 
-`patchforge login` verifies the server and credential, then saves a server-wide
-credential under `~/.config/patchforge/credentials` with mode `0600`. It never
-prints the raw token or writes it into the project. For non-interactive CI,
-provide the token through the secret environment variable `PATCHFORGE_TOKEN`.
-
-Create an application in the web console, copy its App ID, and initialize the
-Flutter project:
-
-```bash
 patchforge init \
   --url https://updates.example.com \
   --app-id 00000000-0000-0000-0000-000000000000
-```
 
-If no saved server credential exists, `patchforge init` asks for the token with
-the same hidden prompt, so `--token` is optional. To create or reuse an app by
-name instead of selecting a console-created App ID, use:
-
-```bash
-patchforge init \
-  --url https://updates.example.com \
-  --app-name com.example.my_app
-```
-
-`patchforge init` verifies the public SDK dependency, server health, and
-authentication; creates or reuses the named app; discovers the active Ed25519
-public key; writes a shareable `patchforge.yaml`; and adds `.patchforge/` to
-the project's `.gitignore`. It also creates an app-specific protected
-credential for `doctor`, `release`, and `patch`. The generated
-`patchforge.yaml` contains only non-secret server, app, channel, and public
-signing values and should be committed with the application source.
-
-Run the project doctor before the first release or whenever a workstation or
-server configuration changes:
-
-```bash
 patchforge doctor
 ```
 
-It checks the Flutter and Android project, requires `patchforge_sdk` 0.6.1 or
-newer, verifies `flutter`, `bsdiff`, and `bspatch`, validates the protected
-publisher credential, reaches the server, authenticates management access, and
-compares the application, signing identity, and active release with
-`patchforge.yaml`. Warnings do not fail the command; every `[FAIL]` item must be
-fixed before publishing.
+`patchforge login` saves the publisher credential outside the project with
+mode `0600`. `patchforge init` creates a shareable `patchforge.yaml` containing
+only the server URL, App ID, channel, signing-key ID, and public key.
 
-Configure the Flutter SDK once with values that the CLI
-injects automatically during release builds, and start the update check after
-the first app frame:
+### 3. Start update checks
+
+Configure the SDK once near app startup:
 
 ```dart
 import 'dart:async';
@@ -202,6 +182,7 @@ void main() {
     config: PatchForgeConfig.fromEnvironment(),
   );
   runApp(const MyApp());
+
   WidgetsBinding.instance.addPostFrameCallback((_) {
     unawaited(_checkForPatch());
   });
@@ -217,351 +198,128 @@ Future<void> _checkForPatch() async {
 }
 ```
 
-When an update is staged, it activates on the next normal app restart. The SDK
-then confirms the patched boot automatically after the first frame and its
-stabilization period.
+## Release and patch
 
-The normal publisher workflow then uses three top-level commands: `init`,
-`release`, and `patch`. Build and register the QA APK baseline:
+```mermaid
+flowchart LR
+    Init[patchforge init] --> Release[patchforge release]
+    Release --> APK[Distribute exact QA APK]
+    APK --> Change[Make Dart-only change]
+    Change --> Patch[patchforge patch]
+    Patch --> Open[Open installed app]
+    Open --> Stage[Patch staged]
+    Stage --> Restart[Restart app]
+    Restart --> Confirm[Activated + confirmed]
+```
+
+Create the baseline and distribute the printed APK to QA:
 
 ```bash
 patchforge release
 ```
 
-`patchforge release` reads the version from the Flutter project's `pubspec.yaml`,
-removes the `+build-number` suffix, runs the Flutter Android release build with
-the server configuration injected, and preserves the baseline APK and
-`libapp.so` under `.patchforge/`. Install or distribute the APK path printed by
-the command to QA through ADB, Firebase App Distribution, or another private
-APK channel. Every tester who should receive later patches must start from this
-exact baseline APK. Override version detection when needed:
-
-```bash
-patchforge release --version 1.0.0
-```
-
-After changing Dart code, build and publish the next patch:
+After a compatible Dart-only change:
 
 ```bash
 patchforge patch
 ```
 
-The patch command runs the matching Flutter build, uses the locally retained
-current runtime as its base, selects the latest server parent, creates and
-reconstructs the delta, uploads it over authenticated HTTPS, creates the signed
-record, verifies the device manifest and public artifact download, then advances
-the local patch state. Use both `--old` and `--new` only for advanced manual
-artifact workflows. The original `release create`, `patch create`, `patch
-release`, and low-level `publish` commands remain available for compatibility.
+The existing QA app downloads and stages the signed patch. Close and reopen the
+app to activate it; PatchForge automatically confirms a healthy boot.
 
-Use `patchforge patch` only when the change is compatible with the current
-baseline. Run `patchforge release` and redistribute a new APK when changing
-Flutter/Dart SDK versions, native Android code, plugins, permissions, assets,
-fonts, the app manifest, or build configuration. When uncertain, create a new
-baseline APK instead of shipping an OTA patch.
+### Patch or new APK?
 
-### End-to-end QA checklist
+| Change | Action |
+| --- | --- |
+| Compatible Dart logic or Flutter UI | `patchforge patch` |
+| Flutter/Dart SDK version | New `patchforge release` APK |
+| Native Android code or plugin | New `patchforge release` APK |
+| Permissions or Android manifest | New `patchforge release` APK |
+| Assets, fonts, or build configuration | New `patchforge release` APK |
+| Unsure | Prefer a new APK baseline |
 
-1. Run `patchforge doctor`; all required checks must pass.
-2. Run `patchforge release` and install its printed APK on the QA device.
-3. Open the app once and confirm its baseline behavior.
-4. Make a compatible Dart-only change and run `patchforge patch`.
-5. Open the existing installed app and let it check for an update.
-6. After the patch is staged, close and reopen the app to activate it.
-7. Verify the new behavior and automatic boot confirmation in the app or
-   PatchForge console.
+Every device in a patch chain must begin with the exact APK produced by the
+matching `patchforge release` command.
 
-To create and verify a local delta without publishing it:
+## End-to-end QA check
+
+- [ ] `patchforge doctor` passes.
+- [ ] `patchforge release` produces the baseline APK.
+- [ ] The exact baseline APK is installed on the QA device.
+- [ ] The baseline app opens successfully.
+- [ ] A Dart-only change is published with `patchforge patch`.
+- [ ] The installed app stages the update.
+- [ ] Restarting the app activates the changed behavior.
+- [ ] The console shows the new patch and confirmed device flow.
+
+## Trust model
+
+```mermaid
+flowchart TB
+    Token[Publisher token] -->|trusted workstation only| CLI[CLI]
+    CLI -->|Bearer token over HTTPS| API[PatchForge API]
+    API -->|stores token hash only| DB[(PostgreSQL)]
+    Key[Signing private key] -->|VPS only| API
+    API -->|signed manifest| Device[QA device]
+    Public[Signing public key] --> Device
+```
+
+| Value | Where it belongs |
+| --- | --- |
+| Publisher token | VPS administrator, trusted developer machine, CI secret |
+| Signing private key | VPS only |
+| Database password | VPS only |
+| Server URL, App ID, key ID, public key | `patchforge.yaml` and mobile build |
+
+Management operations require publisher authentication. Device update checks
+and patch downloads are public but cryptographically verified. The server signs
+manifest metadata with Ed25519; the SDK verifies the signature, base hash,
+delta hash, reconstructed hash, file size, release, channel, patch number, and
+architecture before staging anything.
+
+## Current capabilities
+
+- Android `arm64-v8a`, `armeabi-v7a`, and `x86_64` patch chains
+- Signed manifest v2 with stable percentage rollouts
+- `development`, `staging`, `beta`, and `stable` channels
+- Automatic rollback for an unconfirmed boot
+- Signing-key rotation and revocation
+- PostgreSQL audit events for authenticated management requests
+- Local persistent artifact storage with authenticated HTTPS uploads
+- Standalone Caddy and Dokploy/Traefik deployments
+
+## Operations
+
+| Task | Standalone | Dokploy |
+| --- | --- | --- |
+| Health check | `sudo patchforge doctor` | `sudo patchforge-dokploy doctor` |
+| Status | `sudo patchforge status` | `sudo patchforge-dokploy status` |
+| Server logs | `sudo patchforge logs server` | `sudo patchforge-dokploy logs server` |
+| Database backup | `sudo patchforge backup` | `sudo patchforge-dokploy backup` |
+| Publisher token | `sudo patchforge publisher-token` | `sudo patchforge-dokploy publisher-token` |
+| Upgrade | `sudo patchforge update` | Pin the new tag/image and deploy in Dokploy |
+
+Runtime data is stored under `/opt/patchforge`. Back up the PostgreSQL database,
+signing key, publisher token, and patch artifacts before production-like testing
+or upgrades.
+
+## More documentation
+
+- [Dokploy installation and migration](docs/DOKPLOY.md)
+- [Release checklist](docs/RELEASE.md)
+- [Flutter SDK package](sdk/flutter/patchforge_sdk/README.md)
+- CLI help: `patchforge --help`
+- Release help: `patchforge release --help`
+- Patch help: `patchforge patch --help`
+
+## Development
 
 ```bash
-patchforge patch create \
-  --old build/baseline.apk \
-  --new build/patched.apk \
-  --architecture arm64-v8a \
-  --output build/update.patch
+cargo test --manifest-path server/Cargo.toml --locked
+cargo test --manifest-path cli/Cargo.toml --locked
+
+cd sdk/flutter/patchforge_sdk
+flutter test
 ```
 
-## Publisher authentication
-
-All management endpoints for apps, releases, and patches require an HTTP
-Bearer publisher token. Device update checks and artifact downloads remain
-public so installed applications do not contain publishing credentials.
-
-The server stores only SHA-256 token hashes. Generate a random token and its
-configuration hash without placing the raw token in the server environment:
-
-```bash
-export PATCHFORGE_TOKEN="$(openssl rand -hex 32)"
-cargo run --manifest-path cli/Cargo.toml -- token-hash
-```
-
-Put the printed hash in `server/.env`:
-
-```text
-PATCHFORGE_PUBLISH_TOKEN_HASHES=<sha256-hash>
-```
-
-Keep `PATCHFORGE_TOKEN` in the publisher machine's environment or secret
-manager. The CLI automatically sends it as a Bearer token and hides environment
-values from help/error output.
-
-Run the publisher CLI on the server host when possible. If publishing across a
-network, terminate TLS in front of PatchForge; never transmit a Bearer token
-over plain HTTP on an untrusted network.
-
-For zero-downtime rotation, temporarily configure both hashes separated by a
-comma, restart the server, move publishers to the new raw token, and then remove
-the old hash:
-
-```text
-PATCHFORGE_PUBLISH_TOKEN_HASHES=<old-hash>,<new-hash>
-```
-
-## Automated publish workflow
-
-The CLI `publish` command performs the full release pipeline:
-
-1. Reads the release and selects the next patch number.
-2. Accepts either APK files or extracted `libapp.so` files.
-3. Extracts `lib/<architecture>/libapp.so` when APKs are supplied.
-4. Creates a BSDIFF40 delta with `bsdiff`.
-5. Reconstructs the target with `bspatch` and verifies its SHA-256 and size.
-6. Stores the delta under the server's artifact storage directory without
-   overwriting an existing file.
-7. Creates the signed patch record with a canonical path relative to the
-   server's `/artifacts` route and all delta metadata.
-8. Fetches and validates the update manifest.
-9. Downloads the published artifact and verifies its SHA-256 and size.
-
-By default the CLI uploads the generated artifact through the authenticated
-HTTPS API. The server streams it to temporary storage, enforces its configured
-size limit, verifies its SHA-256 and byte length, and atomically publishes it
-only after validation. Publishers do not need SSH access to the VPS.
-
-Prerequisites: the PatchForge API and PostgreSQL must be running, and `bsdiff`
-and `bspatch` must be installed on the publisher workstation.
-
-Run from the repository root:
-
-```bash
-cargo run --manifest-path cli/Cargo.toml -- publish \
-  --server-url http://127.0.0.1:8080 \
-  --app-id <app-uuid> \
-  --release-id <release-uuid> \
-  --version 1.0.0 \
-  --platform android \
-  --old path/to/base.apk \
-  --new path/to/target.apk \
-  --architecture arm64-v8a \
-  --output path/to/retained-delta.patch
-```
-
-The command requires `PATCHFORGE_TOKEN` to be set. A missing or invalid token
-is rejected before the CLI reads release management data or creates a patch.
-
-`--patch-number` is optional. When omitted, the CLI uses the highest existing
-patch number plus one. `--output` is also optional; the verified server
-artifact is retained by the configured storage provider.
-
-Use `cargo run --manifest-path cli/Cargo.toml -- publish --help` for every
-available option.
-
-### Publish to a self-hosted server
-
-The helper reads the publisher credential from a protected local file and uses
-the same authenticated HTTPS upload flow:
-
-```bash
-scripts/publish-vps.sh \
-  --release-id <release-uuid> \
-  --version 1.0.1 \
-  --platform android \
-  --channel stable \
-  --architecture arm64-v8a \
-  --old path/to/baseline.apk \
-  --new path/to/target.apk \
-  --output path/to/retained.patch
-```
-
-The helper reads the raw publisher token from
-`~/.config/patchforge/vps-publisher-token`, which must have mode `0600`. The
-token is never copied into the repository or VPS environment; the server keeps
-only its SHA-256 hash. Override `PATCHFORGE_SERVER_URL`, `PATCHFORGE_APP_ID`, or
-`PATCHFORGE_TOKEN_FILE` when publishing to another installation.
-
-## Architecture compatibility and patch chains
-
-PatchForge supports `arm64-v8a`, `armeabi-v7a`, and `x86_64` as independent
-delta chains. The SDK discovers the Android ABI and includes it in every update
-check; the server never returns a patch belonging to another architecture. For
-apps installed with an older native plugin, the SDK reads the `libapp.so` ELF
-machine type so the architecture-aware SDK itself can still arrive over OTA.
-
-Each release registers one immutable baseline SHA-256 and size per
-architecture. Every patch also declares `base_patch_number`. The server accepts
-the patch only when its base SHA-256 matches either that architecture's release
-baseline (`base_patch_number = 0`) or the signed target SHA-256 of the declared
-parent patch. This rejects gaps, wrong release binaries, and cross-architecture
-patches before they can be published.
-
-Patch numbers are unique per release and architecture, so the same logical
-number can be published independently for each ABI. Run `publish` once for each
-architecture, supplying APKs that contain the matching `libapp.so`:
-
-```bash
-# Repeat with armeabi-v7a and x86_64 artifacts as required.
-cargo run --manifest-path cli/Cargo.toml -- publish \
-  --server-url http://127.0.0.1:8080 \
-  --app-id <app-uuid> \
-  --release-id <release-uuid> \
-  --version 1.0.0 \
-  --old path/to/base.apk \
-  --new path/to/target.apk \
-  --architecture arm64-v8a
-```
-
-The CLI automatically registers the first baseline, finds the correct parent
-from the supplied base binary, selects the next architecture-specific patch
-number, reconstructs the target, and validates the architecture-aware manifest.
-
-## Release channels and staged rollouts
-
-Releases belong to one of `development`, `staging`, `beta`, or `stable`.
-Existing releases and SDK installations default to `stable`. Configure another
-channel in `PatchForgeConfig(channel: 'beta', ...)` and create the matching
-server release with the same channel.
-
-New patches use signed manifest v2 by default. Its signature covers the channel,
-rollout percentage, and parent patch number in addition to all v1 fields. The
-SDK keeps a random installation ID locally and the server hashes that ID with
-the patch identity to make rollout assignment stable across update checks.
-
-Publish to a channel and a deterministic percentage with:
-
-```bash
-cargo run --manifest-path cli/Cargo.toml -- publish \
-  --server-url http://127.0.0.1:8080 \
-  --app-id <app-uuid> \
-  --release-id <release-uuid> \
-  --version 1.0.0 \
-  --old path/to/base.apk \
-  --new path/to/target.apk \
-  --channel beta \
-  --rollout-percentage 25 \
-  --architecture arm64-v8a
-```
-
-A 0% rollout is held back from every device; 100% reaches all devices. For an
-installed SDK that only understands manifest v1, first publish a 100% v1 bridge
-with `--manifest-version 1`, then publish subsequent patches as v2.
-
-## Signing-key rotation and revocation
-
-The server registers the configured Ed25519 public key at startup. Exactly one
-key is `active`; previous keys become `retired`, and retired signatures remain
-servable during a migration window. A `revoked` key can no longer authorize an
-update manifest. The server refuses to start with a revoked active key and also
-refuses to revoke the currently active key.
-
-Rotate keys without locking out installed applications:
-
-1. Generate the next key pair and keep its private key in a secret manager.
-2. Add only the next public key to `trustedPublicKeys` and publish this bridge
-   patch with the current key.
-3. Confirm that devices have booted the bridge.
-4. Change `PATCHFORGE_KEY_ID` and `PATCHFORGE_PRIVATE_KEY` to the next key and
-   restart the server. This makes the prior key `retired`.
-5. Publish and boot a patch signed by the next key.
-6. After the migration window, revoke the retired key through the authenticated
-   `POST /api/v1/signing-keys/{key_id}/revoke` endpoint and add that key ID to
-   the SDK's `revokedKeyIds` in the new-key-signed patch.
-
-Never revoke the old key before the trust bridge has reached the devices that
-must continue receiving updates. Inspect registry state through the protected
-`GET /api/v1/signing-keys` endpoint.
-
-## Runtime secrets and audit trail
-
-Production deployments should set `PATCHFORGE_PRIVATE_KEY_FILE` instead of
-placing `PATCHFORGE_PRIVATE_KEY` in an environment file. The file setting takes
-precedence when both exist, which prevents a stale `.env` value from silently
-reactivating the wrong key. Mount the file read-only from the host or a runtime
-secret manager and restrict host permissions to the service account.
-
-The Compose definition in `infra/docker-compose.yml` mounts an external file as
-the Docker secret `/run/secrets/patchforge_private_key`. Before starting it, set
-these host environment variables without putting their values in the repository:
-
-```bash
-export PATCHFORGE_KEY_ID=rotation-2026
-export PATCHFORGE_PRIVATE_KEY_FILE=/absolute/path/outside/repository/patchforge_private_key
-export PATCHFORGE_PUBLISH_TOKEN_HASHES=<publisher-token-sha256>
-export PATCHFORGE_RUNTIME_UID="$(id -u)"
-export PATCHFORGE_RUNTIME_GID="$(id -g)"
-docker compose -f infra/docker-compose.yml up --build -d
-```
-
-The secret file contains only the Base64-encoded 32-byte Ed25519 private key.
-The server validates it at startup and refuses revoked keys. The Compose server
-runs as `PATCHFORGE_RUNTIME_UID:PATCHFORGE_RUNTIME_GID` (both default to 1000),
-which must own the mode-0600 secret file. This preserves least-privilege file
-permissions instead of making the private key readable by every container user.
-
-Authenticated management traffic is recorded in PostgreSQL without storing the
-raw Bearer token. Audit rows contain a short token-hash fingerprint, HTTP
-method, resource path, response status, and timestamp. Signing-key activation
-at startup is recorded with the `system` actor. Read the newest events through:
-
-```text
-GET /api/v1/audit-events?limit=100
-GET /api/v1/audit-events?limit=100&before_id=<oldest-seen-id>
-```
-
-The audit endpoint itself requires publisher authentication and supports limits
-from 1 to 500.
-
-## HTTPS and request protection
-
-The production Compose stack exposes only Caddy on ports 80 and 443. The Rust
-server remains on the internal Compose network, so clients cannot bypass proxy
-TLS or spoof `X-Forwarded-For`. Set `PATCHFORGE_DOMAIN` to a DNS name that points
-to the host, then start the full stack:
-
-```bash
-export PATCHFORGE_DOMAIN=updates.example.com
-export PATCHFORGE_DB_PASSWORD=<random-hex-database-password>
-docker compose \
-  --env-file .env \
-  -f infra/docker-compose.yml \
-  -f infra/docker-compose.production.yml \
-  up --build -d
-```
-
-Always include `docker-compose.production.yml` on an Internet-facing host. It
-removes PostgreSQL's host port, replaces the development database password,
-makes the API container filesystem read-only, and enables no-new-privileges.
-The database password should contain random hexadecimal characters so it can be
-embedded safely in the PostgreSQL connection URL.
-
-Caddy obtains and renews public certificates automatically for a reachable
-public domain and redirects HTTP to HTTPS. The default `localhost` configuration
-uses Caddy's local certificate authority for development.
-
-The server independently applies these protections:
-
-- fixed-window per-client limits for update checks, artifact downloads, and
-  authenticated management routes;
-- `429 Too Many Requests` with `Retry-After: 60` after a limit is exceeded;
-- a 1 MiB maximum body for management requests;
-- configurable request timeout;
-- `nosniff`, frame denial, no-referrer, permissions policy, and no-store
-  response headers;
-- HSTS when `PATCHFORGE_HTTPS_ENABLED=true`.
-
-Configure limits through `PATCHFORGE_PUBLIC_RATE_LIMIT_PER_MINUTE`,
-`PATCHFORGE_ARTIFACT_RATE_LIMIT_PER_MINUTE`,
-`PATCHFORGE_MANAGEMENT_RATE_LIMIT_PER_MINUTE`, and
-`PATCHFORGE_REQUEST_TIMEOUT_SECONDS`. Only enable `PATCHFORGE_TRUST_PROXY` when
-the application port is inaccessible except through a trusted proxy. The
-provided Compose stack sets both proxy trust and HTTPS mode safely; direct
-`cargo run` keeps them disabled by default.
+PatchForge is licensed under the terms in [LICENSE](LICENSE).
