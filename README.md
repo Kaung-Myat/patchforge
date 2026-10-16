@@ -26,6 +26,11 @@ flowchart LR
 Use only one deployment mode on a VPS. Standalone Caddy and Dokploy's Traefik
 both require ports 80 and 443, so they cannot run together.
 
+> [!CAUTION]
+> The two deployment modes use different VPS management commands. Standalone
+> installations use `sudo patchforge ...`; Dokploy installations use
+> `sudo patchforge-dokploy ...`. Do not mix these helpers.
+
 ```mermaid
 flowchart TD
     Start{Does the VPS already use Dokploy?}
@@ -68,6 +73,8 @@ sudo env \
 The installer creates the database, signing identity, publisher credential,
 artifact storage, HTTPS proxy, and management command under `/opt/patchforge`.
 
+These commands are for **standalone installations only**:
+
 ```bash
 sudo patchforge doctor
 sudo patchforge status
@@ -106,12 +113,16 @@ Create a Dokploy Compose service with:
 | Environment | Contents of `/opt/patchforge/dokploy.env` |
 | Domains tab with `sslip.io` | Leave empty |
 
-Deploy, then verify:
+Deploy, then use the **Dokploy management helper only**:
 
 ```bash
 sudo patchforge-dokploy doctor
+sudo patchforge-dokploy status
 sudo patchforge-dokploy publisher-token
 ```
+
+Do not run `sudo patchforge ...` for this deployment. That command belongs to
+the standalone Caddy installation and checks a different configuration file.
 
 See [the complete Dokploy guide](docs/DOKPLOY.md) for migration, upgrades,
 resource limits, and recovery.
@@ -119,8 +130,18 @@ resource limits, and recovery.
 ## Open the console
 
 Visit `https://updates.example.com/console/` and connect with the publisher
-token returned by `publisher-token`. The token stays in the current browser tab
-and must never be committed, embedded in an APK, or given to QA testers.
+token returned by the helper for your deployment mode:
+
+```bash
+# Standalone only
+sudo patchforge publisher-token
+
+# Dokploy only
+sudo patchforge-dokploy publisher-token
+```
+
+The token stays in the current browser tab and must never be committed,
+embedded in an APK, or given to QA testers.
 
 The console creates applications and releases and displays patch chains. Patch
 artifacts are built on a trusted Flutter developer machine.
@@ -290,7 +311,10 @@ architecture before staging anything.
 
 ## Operations
 
-| Task | Standalone | Dokploy |
+Choose one column and use only that column for the lifetime of the
+installation.
+
+| Task | Standalone (`patchforge`) | Dokploy (`patchforge-dokploy`) |
 | --- | --- | --- |
 | Health check | `sudo patchforge doctor` | `sudo patchforge-dokploy doctor` |
 | Status | `sudo patchforge status` | `sudo patchforge-dokploy status` |
